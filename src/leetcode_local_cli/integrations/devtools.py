@@ -73,10 +73,11 @@ def get_cookies_from_browser_endpoint(
     _validate_local_debugger_url(debugger_url, expected_port)
     deadline = monotonic() + timeout_seconds
     try:
+        # WebSocket closing handshake has its own bounded close_timeout on context exit.
         with connect(
             debugger_url,
             open_timeout=timeout_seconds,
-            close_timeout=DEVTOOLS_TIMEOUT_SECONDS,
+            close_timeout=min(DEVTOOLS_TIMEOUT_SECONDS, timeout_seconds),
             compression=None,
             max_size=1_000_000,
             proxy=None,

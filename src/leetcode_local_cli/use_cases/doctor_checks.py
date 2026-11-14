@@ -184,6 +184,9 @@ def diagnose_remote(
             case ClientErrorKind.INVALID_RESPONSE:
                 message = "LeetCode 中文站接口结构异常"
                 suggestion = "接口可能已变更，请检查项目更新"
+            case ClientErrorKind.GRAPHQL_ERROR:
+                message = "LeetCode 中文站 GraphQL 接口返回错误"
+                suggestion = "请检查登录状态、请求参数或项目更新"
             case ClientErrorKind.UNAUTHORIZED | ClientErrorKind.MISSING_CSRF:
                 return (
                     DoctorCheck(

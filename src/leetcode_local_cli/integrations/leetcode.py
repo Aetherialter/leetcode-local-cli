@@ -217,6 +217,13 @@ class LeetCodeClient:
         result = self._request_json("POST", "/graphql/", json=query, timeout=10)
         if isinstance(result, ClientFailure):
             return result
+        errors = result.data.get("errors")
+        if errors is not None:
+            if isinstance(errors, list):
+                if errors:
+                    return ClientFailure(ClientErrorKind.GRAPHQL_ERROR)
+            else:
+                return ClientFailure(ClientErrorKind.INVALID_RESPONSE)
         data = result.data.get("data")
         value = data.get(field) if isinstance(data, dict) else None
         if not isinstance(value, dict):
@@ -295,6 +302,8 @@ class LeetCodeClient:
         )
 
     def problem_detail(self, title_slug: str) -> ClientResult[ProblemDetail]:
+        if not isinstance(title_slug, str) or not title_slug.strip():
+            return ClientFailure(ClientErrorKind.INVALID_RESPONSE)
         result = self._graphql(
             {
                 "operationName": "questionData",
@@ -305,7 +314,10 @@ class LeetCodeClient:
         )
         if isinstance(result, ClientFailure):
             return result
-        return ClientSuccess(normalize_problem_detail(result.data))
+        try:
+            return ClientSuccess(normalize_problem_detail(result.data))
+        except ValueError:
+            return ClientFailure(ClientErrorKind.INVALID_RESPONSE)
 
     def submit_solution(
         self, title_slug: str, question_id: str, code: str

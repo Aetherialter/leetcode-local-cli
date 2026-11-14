@@ -573,7 +573,7 @@ def test_authorized_browser_login_opens_pages_when_permission_is_missing(
     monkeypatch.setattr(
         login_use_case,
         "_wait_for_browser_cookies",
-        lambda received_browser: cookies,
+        lambda received_browser, *, deadline=None: cookies,
     )
     monkeypatch.setattr(
         login_use_case, "validate_and_save_login", lambda *args, **kwargs: True
@@ -665,7 +665,7 @@ def test_chrome_login_starts_browser_when_saved_endpoint_is_unreachable(
     monkeypatch.setattr(
         login_use_case,
         "_wait_for_browser_cookies",
-        lambda browser: events.append(("wait", browser)) or cookies,
+        lambda browser, *, deadline=None: events.append(("wait", browser)) or cookies,
     )
     monkeypatch.setattr(
         login_use_case, "validate_and_save_login", lambda *args, **kwargs: True
@@ -758,7 +758,9 @@ def test_authorized_browser_login_opens_visible_window_and_retries_after_rejecti
     monkeypatch.setattr(
         login_use_case,
         "_wait_for_browser_cookies",
-        lambda received_browser: events.append(("retry", received_browser)) or cookies,
+        lambda received_browser, *, deadline=None: (
+            events.append(("retry", received_browser)) or cookies
+        ),
     )
     monkeypatch.setattr(
         login_use_case, "validate_and_save_login", lambda *args, **kwargs: True
@@ -1174,3 +1176,292 @@ def test_check_rejects_invalid_submission_id(submission_id: str) -> None:
 
     assert result.exit_code == 2
     assert "submission" in result.output.lower()
+
+
+def test_authorized_browser_login_shares_single_deadline_across_retry(
+    monkeypatch,
+) -> None:
+    now = 100.0
+    recorded_timeouts: list[float] = []
+    recorded_sleeps: list[float] = []
+    endpoint = BrowserDevToolsEndpoint(
+        port=53127,
+        debugger_url="ws://127.0.0.1:53127/devtools/browser/example",
+    )
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        recorded_sleeps.append(seconds)
+        now += seconds
+
+    def fake_read_cookies(browser, received_endpoint, *, timeout_seconds):
+        nonlocal now
+        recorded_timeouts.append(timeout_seconds)
+        if len(recorded_timeouts) == 1:
+            now += 120.0
+            raise login_use_case.DevToolsApprovalRejected("approval rejected")
+        if len(recorded_timeouts) == 2:
+            now += 50.0
+            raise login_use_case.DevToolsConnectionUnavailable("still starting")
+        return {"LEETCODE_SESSION": "session", "csrftoken": "csrf"}
+
+    monkeypatch.setattr(login_use_case, "monotonic", fake_monotonic)
+    monkeypatch.setattr(login_use_case, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        login_use_case,
+        "read_browser_devtools_endpoint",
+        lambda browser: endpoint,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "open_browser_authorization_pages",
+        lambda browser: None,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "_read_browser_login_cookies",
+        fake_read_cookies,
+    )
+    monkeypatch.setattr(
+        login_use_case, "validate_and_save_login", lambda *args, **kwargs: True
+    )
+
+    assert (
+        login_use_case._try_authorized_browser_login(
+            BrowserKind.CHROME,
+            Path("session.json"),
+            reporter=login_reporter,
+        )
+        is True
+    )
+    assert recorded_timeouts == [180.0, 59.0, 8.5]
+    assert recorded_sleeps == [1.0, 0.5]
+
+
+def test_authorized_browser_login_stops_without_reopening_when_budget_exhausted(
+    monkeypatch,
+) -> None:
+    now = 0.0
+    endpoint = BrowserDevToolsEndpoint(
+        port=53127,
+        debugger_url="ws://127.0.0.1:53127/devtools/browser/example",
+    )
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_read_cookies(browser, received_endpoint, *, timeout_seconds):
+        nonlocal now
+        now += timeout_seconds
+        raise login_use_case.DevToolsConnectionUnavailable("timed out")
+
+    monkeypatch.setattr(login_use_case, "monotonic", fake_monotonic)
+    monkeypatch.setattr(
+        login_use_case,
+        "sleep",
+        lambda seconds: pytest.fail("must not sleep after budget exhausted"),
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "read_browser_devtools_endpoint",
+        lambda browser: endpoint,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "open_browser_authorization_pages",
+        lambda browser: pytest.fail("must not reopen after budget exhausted"),
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "_read_browser_login_cookies",
+        fake_read_cookies,
+    )
+
+    assert (
+        login_use_case._try_authorized_browser_login(
+            BrowserKind.CHROME,
+            Path("session.json"),
+            reporter=login_reporter,
+        )
+        is False
+    )
+
+
+def test_auto_login_gives_edge_fresh_budget_after_chrome_timeout(monkeypatch) -> None:
+    now = 10.0
+    browser_timeouts: list[tuple[BrowserKind, float]] = []
+    endpoint = BrowserDevToolsEndpoint(
+        port=53127,
+        debugger_url="ws://127.0.0.1:53127/devtools/browser/example",
+    )
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def fake_read_cookies(browser, received_endpoint, *, timeout_seconds):
+        nonlocal now
+        browser_timeouts.append((browser, timeout_seconds))
+        if browser is BrowserKind.CHROME:
+            now += timeout_seconds
+            raise login_use_case.DevToolsConnectionUnavailable("chrome timed out")
+        return {"LEETCODE_SESSION": "session", "csrftoken": "csrf"}
+
+    monkeypatch.setattr(login_use_case, "monotonic", fake_monotonic)
+    monkeypatch.setattr(login_use_case, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        login_use_case,
+        "read_browser_devtools_endpoint",
+        lambda browser: endpoint,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "_read_browser_login_cookies",
+        fake_read_cookies,
+    )
+    monkeypatch.setattr(
+        login_use_case, "validate_and_save_login", lambda *args, **kwargs: True
+    )
+
+    assert (
+        login_use_case.try_automatic_login(
+            BrowserKind.AUTO,
+            Path("session.json"),
+            reporter=login_reporter,
+        )
+        is True
+    )
+    assert browser_timeouts == [
+        (BrowserKind.CHROME, 180.0),
+        (BrowserKind.EDGE, 180.0),
+    ]
+
+
+def test_authorized_browser_login_recomputes_budget_after_opening_browser_pages(
+    monkeypatch,
+) -> None:
+    now = 0.0
+    endpoint = BrowserDevToolsEndpoint(
+        port=53127,
+        debugger_url="ws://127.0.0.1:53127/devtools/browser/example",
+    )
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_read_cookies(browser, received_endpoint, *, timeout_seconds):
+        nonlocal now
+        now += 179.5
+        raise login_use_case.DevToolsConnectionUnavailable("browser starting")
+
+    def fake_open_pages(browser) -> None:
+        nonlocal now
+        now += 0.6
+
+    monkeypatch.setattr(login_use_case, "monotonic", fake_monotonic)
+    monkeypatch.setattr(
+        login_use_case,
+        "sleep",
+        lambda seconds: pytest.fail("must not sleep after open exhausts budget"),
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "read_browser_devtools_endpoint",
+        lambda browser: endpoint,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "open_browser_authorization_pages",
+        fake_open_pages,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "_read_browser_login_cookies",
+        fake_read_cookies,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "_wait_for_browser_cookies",
+        lambda *args, **kwargs: pytest.fail("must not poll after open exhausts budget"),
+    )
+
+    assert (
+        login_use_case._try_authorized_browser_login(
+            BrowserKind.CHROME,
+            Path("session.json"),
+            reporter=login_reporter,
+        )
+        is False
+    )
+
+
+def test_authorized_browser_login_clamps_delay_using_remaining_after_open(
+    monkeypatch,
+) -> None:
+    now = 0.0
+    recorded_sleeps: list[float] = []
+    recorded_timeouts: list[float] = []
+    endpoint = BrowserDevToolsEndpoint(
+        port=53127,
+        debugger_url="ws://127.0.0.1:53127/devtools/browser/example",
+    )
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        recorded_sleeps.append(seconds)
+        now += seconds
+
+    def fake_read_cookies(browser, received_endpoint, *, timeout_seconds):
+        nonlocal now
+        recorded_timeouts.append(timeout_seconds)
+        if len(recorded_timeouts) == 1:
+            now += 178.0
+            raise login_use_case.DevToolsApprovalRejected("approval rejected")
+        return {"LEETCODE_SESSION": "session", "csrftoken": "csrf"}
+
+    def fake_open_pages(browser) -> None:
+        nonlocal now
+        now += 1.2
+
+    monkeypatch.setattr(login_use_case, "monotonic", fake_monotonic)
+    monkeypatch.setattr(login_use_case, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        login_use_case,
+        "read_browser_devtools_endpoint",
+        lambda browser: endpoint,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "open_browser_authorization_pages",
+        fake_open_pages,
+    )
+    monkeypatch.setattr(
+        login_use_case,
+        "_read_browser_login_cookies",
+        fake_read_cookies,
+    )
+    monkeypatch.setattr(
+        login_use_case, "validate_and_save_login", lambda *args, **kwargs: True
+    )
+
+    assert (
+        login_use_case._try_authorized_browser_login(
+            BrowserKind.CHROME,
+            Path("session.json"),
+            reporter=login_reporter,
+        )
+        is False
+    )
+    assert len(recorded_sleeps) == 1
+    assert recorded_sleeps[0] == pytest.approx(0.8)
+    assert len(recorded_timeouts) == 1
+    assert recorded_timeouts[0] == pytest.approx(180.0)

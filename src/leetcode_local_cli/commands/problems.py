@@ -1,3 +1,5 @@
+from typer import BadParameter
+
 from leetcode_local_cli.commands import common
 from leetcode_local_cli.commands.rendering import (
     loading,
@@ -6,6 +8,7 @@ from leetcode_local_cli.commands.rendering import (
     success,
     warning,
 )
+from leetcode_local_cli.models.editor import EditorConfig
 from leetcode_local_cli.use_cases.errors import UseCaseError
 from leetcode_local_cli.use_cases.problems import (
     get_problem_detail_by_question_id,
@@ -41,9 +44,16 @@ def show(limit: int = 50, skip: int = 0) -> None:
 
 
 def solve(question_id: str, no_open: bool = False, editor: str | None = None) -> None:
+    selected_editor: EditorConfig | None = None
+    if not no_open and editor is not None:
+        try:
+            selected_editor = EditorConfig(editor)
+        except ValueError as exc:
+            raise BadParameter(str(exc), param_hint="--editor") from exc
     try:
         paths = common.require_app_paths()
-        selected_editor = None if no_open else get_editor(paths.user, editor)
+        if not no_open and selected_editor is None:
+            selected_editor = get_editor(paths.user)
         problem_detail = get_problem_detail_by_question_id(
             paths.user,
             question_id,

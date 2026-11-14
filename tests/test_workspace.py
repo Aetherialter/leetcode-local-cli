@@ -399,3 +399,328 @@ def test_inspect_solution_file_accepts_utf8_bom(tmp_path) -> None:
 
     assert result.status is SolutionFileStatus.READY
     assert result.metadata == metadata
+
+
+def test_parse_solution_submission_ignores_metadata_inside_and_after_submit_region(
+    tmp_path,
+) -> None:
+    solution_file = tmp_path / "solution.py"
+    solution_file.write_text(
+        "\n".join(
+            [
+                "# @lc problem_id: 1",
+                "# @lc submit_question_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "",
+                "# @lc submit_begin",
+                "# @lc problem_id: 999",
+                "# @lc title_slug: hijacked",
+                "class Solution:",
+                "    pass",
+                "# @lc submit_end",
+                "# @lc title: Hijacked After",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metadata, code = workspace.parse_solution_submission(solution_file)
+
+    assert metadata == ProblemMetadata("1", "1", "Two Sum", "two-sum")
+    assert "# @lc problem_id: 999" in code
+
+
+def test_parse_solution_submission_rejects_metadata_defined_only_inside_submit_region(
+    tmp_path,
+) -> None:
+    solution_file = tmp_path / "solution.py"
+    solution_file.write_text(
+        "\n".join(
+            [
+                "# @lc problem_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "# @lc submit_begin",
+                "# @lc submit_question_id: 1",
+                "class Solution:",
+                "    pass",
+                "# @lc submit_end",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkspaceError, match="缺少元数据"):
+        workspace.parse_solution_submission(solution_file)
+
+
+@pytest.mark.parametrize(
+    ("body_lines", "expected_error"),
+    [
+        (
+            [
+                "# @lc submit_begin",
+                "# @lc submit_begin",
+                "class Solution:",
+                "    pass",
+                "# @lc submit_end",
+            ],
+            "重复",
+        ),
+        (
+            [
+                "# @lc submit_begin",
+                "class Solution:",
+                "    pass",
+                "# @lc submit_end",
+                "extra = 1",
+                "# @lc submit_end",
+            ],
+            "重复",
+        ),
+        (
+            [
+                "# @lc submit_begin",
+                "class Solution:",
+                "    pass",
+                "# @lc submit_end",
+                "# @lc submit_begin",
+                "class Other:",
+                "    pass",
+                "# @lc submit_end",
+            ],
+            "重复",
+        ),
+        (
+            [
+                "# @lc submit_end",
+                "class Solution:",
+                "    pass",
+                "# @lc submit_begin",
+            ],
+            "顺序",
+        ),
+        (
+            [
+                "class Solution:",
+                "    pass",
+                "# @lc submit_end",
+            ],
+            "不完整",
+        ),
+        (
+            [
+                "# @lc submit_begin",
+                "class Solution:",
+                "    pass",
+            ],
+            "不完整",
+        ),
+    ],
+)
+def test_parse_solution_submission_rejects_ambiguous_markers_without_modifying_file(
+    tmp_path,
+    body_lines,
+    expected_error,
+) -> None:
+    solution_file = tmp_path / "solution.py"
+    content = "\n".join(
+        [
+            "# @lc problem_id: 1",
+            "# @lc submit_question_id: 1",
+            "# @lc title: Two Sum",
+            "# @lc title_slug: two-sum",
+            *body_lines,
+        ]
+    )
+    solution_file.write_text(content, encoding="utf-8")
+    original = solution_file.read_bytes()
+
+    with pytest.raises(WorkspaceError, match=expected_error):
+        workspace.parse_solution_submission(solution_file)
+
+    assert solution_file.read_bytes() == original
+
+
+def test_parse_solution_submission_ignores_marker_text_in_strings_and_inline_comments(
+    tmp_path,
+) -> None:
+    solution_file = tmp_path / "solution.py"
+    solution_file.write_text(
+        "\n".join(
+            [
+                'HEADER_NOTE = """',
+                "# @lc problem_id: 999",
+                "# @lc submit_begin",
+                '"""',
+                "# @lc problem_id: 1",
+                "# @lc submit_question_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "# @lc submit_begin",
+                "class Solution:",
+                "    def solve(self) -> str:",
+                '        a = """',
+                "# @lc submit_end",
+                "# @lc submit_begin",
+                "# @lc problem_id: 888",
+                '"""',
+                '        b = f"""{1}',
+                "# @lc submit_end",
+                '"""',
+                '        c = "# @lc submit_end"  # @lc submit_end',
+                "        return a + b + c",
+                "# @lc submit_end",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metadata, code = workspace.parse_solution_submission(solution_file)
+
+    assert metadata == ProblemMetadata("1", "1", "Two Sum", "two-sum")
+    assert "return a + b + c" in code
+    assert "# @lc submit_end" in code
+
+
+def test_parse_solution_submission_preserves_syntax_policy_for_valid_markers(
+    tmp_path,
+) -> None:
+    solution_file = tmp_path / "solution.py"
+    solution_file.write_text(
+        "\n".join(
+            [
+                "# @lc problem_id: 1",
+                "# @lc submit_question_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "# @lc submit_begin",
+                "class Solution:",
+                "    def broken(:",
+                "        pass",
+                "# @lc submit_end",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    original = solution_file.read_bytes()
+
+    metadata, code = workspace.parse_solution_submission(solution_file)
+
+    assert metadata.problem_id == "1"
+    assert "def broken(:" in code
+    assert solution_file.read_bytes() == original
+
+
+def test_parse_solution_submission_rejects_unterminated_string_around_marker(
+    tmp_path,
+) -> None:
+    solution_file = tmp_path / "solution.py"
+    solution_file.write_text(
+        "\n".join(
+            [
+                "# @lc problem_id: 1",
+                "# @lc submit_question_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "# @lc submit_begin",
+                's = """',
+                "# @lc submit_end",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkspaceError):
+        workspace.parse_solution_submission(solution_file)
+
+
+def test_parse_solution_submission_ignores_comments_inside_fstring_and_nested_fstring(
+    tmp_path,
+) -> None:
+    solution_file = tmp_path / "solution.py"
+    solution_file.write_text(
+        "\n".join(
+            [
+                'HEADER_FSTRING = f"""{1 +',
+                "# @lc problem_id: 999",
+                "# @lc submit_begin",
+                '+ 2}"""',
+                "HEADER_NESTED = f\"{f'''{1 +",
+                "# @lc problem_id: 777",
+                "+ 2}'''}\"",
+                "# @lc problem_id: 1",
+                "# @lc submit_question_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "# @lc submit_begin",
+                "class Solution:",
+                "    def solve(self) -> str:",
+                '        a = f"""{1 +',
+                "# @lc submit_end",
+                "# @lc problem_id: 888",
+                '+ 2}"""',
+                "        b = f\"{f'''{1 +",
+                "# @lc submit_end",
+                "+ 2}'''}\"",
+                "        return a + b",
+                "# @lc submit_end",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metadata, code = workspace.parse_solution_submission(solution_file)
+
+    assert metadata == ProblemMetadata("1", "1", "Two Sum", "two-sum")
+    assert "return a + b" in code
+    assert "# @lc submit_end" in code
+
+
+@pytest.mark.parametrize(
+    "broken_source",
+    [
+        "\n".join(
+            [
+                "# @lc problem_id: 1",
+                "# @lc submit_question_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "# @lc submit_begin",
+                's = f"""{1 +',
+                "# @lc submit_end",
+            ]
+        ),
+        "\n".join(
+            [
+                "# @lc problem_id: 1",
+                "# @lc submit_question_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "# @lc submit_begin",
+                's = f"{',
+                "# @lc submit_end",
+            ]
+        ),
+        "\n".join(
+            [
+                "# @lc problem_id: 1",
+                "# @lc submit_question_id: 1",
+                "# @lc title: Two Sum",
+                "# @lc title_slug: two-sum",
+                "# @lc submit_begin",
+                's = f"""',
+                "# @lc submit_end",
+            ]
+        ),
+    ],
+)
+def test_parse_solution_submission_rejects_unterminated_fstring(
+    tmp_path, broken_source
+) -> None:
+    solution_file = tmp_path / "solution.py"
+    solution_file.write_text(broken_source, encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="未闭合字符串"):
+        workspace.parse_solution_submission(solution_file)

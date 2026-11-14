@@ -127,6 +127,7 @@ def _try_authorized_browser_login(
     display_name = get_browser_display_name(browser)
     remote_debugging_url = get_browser_remote_debugging_url(browser)
     source = get_browser_session_source(browser)
+    deadline = monotonic() + BROWSER_LOGIN_TIMEOUT_SECONDS
     reporter.info(
         f"{display_name} 自动登录前，请先打开 {remote_debugging_url}，"
         "勾选 Allow remote debugging for this browser instance"
@@ -136,6 +137,10 @@ def _try_authorized_browser_login(
             endpoint = read_browser_devtools_endpoint(browser)
         except BrowserAuthorizationPending:
             open_browser_authorization_pages(browser)
+            if deadline - monotonic() <= 0:
+                raise BrowserError(
+                    f"等待 {display_name} 授权或 LeetCode 登录状态超时"
+                ) from None
             reporter.info(
                 f"已尝试打开 {display_name} 的 Remote debugging 页面和 LeetCode；"
                 f"如未显示，请手动打开 {remote_debugging_url}"
@@ -145,8 +150,11 @@ def _try_authorized_browser_login(
                 f"CLI 最多等待 {BROWSER_LOGIN_TIMEOUT_SECONDS:g} 秒"
             )
             with reporter.loading(f"正在等待 {display_name} 授权和登录状态..."):
-                cookies = _wait_for_browser_cookies(browser)
+                cookies = _wait_for_browser_cookies(browser, deadline=deadline)
         else:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise BrowserError(f"等待 {display_name} 授权或 LeetCode 登录状态超时")
             reporter.info(
                 f"已检测到 {display_name} 调试授权记录；正在检查连接，"
                 "如出现确认请选择允许"
@@ -156,9 +164,13 @@ def _try_authorized_browser_login(
                     cookies = _read_browser_login_cookies(
                         browser,
                         endpoint,
-                        timeout_seconds=BROWSER_LOGIN_TIMEOUT_SECONDS,
+                        timeout_seconds=remaining,
                     )
             except (DevToolsApprovalRejected, DevToolsConnectionUnavailable) as exc:
+                if deadline - monotonic() <= 0:
+                    raise BrowserError(
+                        f"等待 {display_name} 授权或 LeetCode 登录状态超时"
+                    ) from exc
                 if isinstance(exc, DevToolsApprovalRejected):
                     reporter.warning(
                         f"当前 {display_name} 只有后台进程或拒绝了连接，"
@@ -172,13 +184,25 @@ def _try_authorized_browser_login(
                     )
                 open_browser_authorization_pages(browser)
                 reporter.info("如出现 Allow remote debugging? 确认框，请选择 Allow")
-                sleep(BROWSER_WINDOW_READY_DELAY_SECONDS)
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise BrowserError(
+                        f"等待 {display_name} 授权或 LeetCode 登录状态超时"
+                    ) from exc
+                delay = min(BROWSER_WINDOW_READY_DELAY_SECONDS, remaining)
+                if delay > 0:
+                    sleep(delay)
+                if deadline - monotonic() <= 0:
+                    raise BrowserError(
+                        f"等待 {display_name} 授权或 LeetCode 登录状态超时"
+                    ) from exc
                 with reporter.loading(f"正在等待 {display_name} 确认和登录状态..."):
-                    cookies = _wait_for_browser_cookies(browser)
+                    cookies = _wait_for_browser_cookies(browser, deadline=deadline)
     except (BrowserError, DevToolsError) as exc:
         reporter.warning(f"{display_name} 自动登录失败：{exc}")
         return False
 
+    # Online verification uses LeetCodeClient's own request timeout outside the browser polling budget.
     if validate_and_save_login(
         cookies,
         source=source,
@@ -215,10 +239,16 @@ def _try_explicit_devtools_login(
     return False
 
 
-def _wait_for_browser_cookies(browser: BrowserKind) -> dict[str, str]:
+def _wait_for_browser_cookies(
+    browser: BrowserKind,
+    *,
+    deadline: float | None = None,
+) -> dict[str, str]:
     display_name = get_browser_display_name(browser)
-    deadline = monotonic() + BROWSER_LOGIN_TIMEOUT_SECONDS
-    while monotonic() < deadline:
+    active_deadline = (
+        monotonic() + BROWSER_LOGIN_TIMEOUT_SECONDS if deadline is None else deadline
+    )
+    while monotonic() < active_deadline:
         try:
             endpoint = read_browser_devtools_endpoint(browser)
         except BrowserAuthorizationPending:
@@ -226,7 +256,7 @@ def _wait_for_browser_cookies(browser: BrowserKind) -> dict[str, str]:
         except BrowserError:
             raise
         if endpoint is not None:
-            remaining = deadline - monotonic()
+            remaining = active_deadline - monotonic()
             if remaining <= 0:
                 break
             try:
@@ -237,7 +267,7 @@ def _wait_for_browser_cookies(browser: BrowserKind) -> dict[str, str]:
                 )
             except (DevToolsApprovalRejected, DevToolsConnectionUnavailable):
                 pass
-        remaining = deadline - monotonic()
+        remaining = active_deadline - monotonic()
         if remaining <= 0:
             break
         sleep(min(BROWSER_COOKIE_POLL_INTERVAL_SECONDS, remaining))

@@ -250,6 +250,7 @@ def test_diagnose_solution_rejects_invalid_encoding_without_running(
         (ClientErrorKind.HTTP, "HTTP"),
         (ClientErrorKind.INVALID_JSON, "无法解析"),
         (ClientErrorKind.INVALID_RESPONSE, "接口结构异常"),
+        (ClientErrorKind.GRAPHQL_ERROR, "GraphQL"),
     ],
 )
 def test_diagnose_remote_reports_connectivity_failures(

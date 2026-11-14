@@ -9,6 +9,7 @@ class ClientErrorKind(str, Enum):
     HTTP = "http"
     INVALID_JSON = "invalid_json"
     INVALID_RESPONSE = "invalid_response"
+    GRAPHQL_ERROR = "graphql_error"
     UNAUTHORIZED = "unauthorized"
     MISSING_CSRF = "missing_csrf"
     UNSAFE_TARGET = "unsafe_target"

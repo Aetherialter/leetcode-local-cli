@@ -31,6 +31,8 @@ def client_error_message(kind: ClientErrorKind | None) -> str:
             return "LeetCode 返回内容无法解析，请稍后重试"
         case ClientErrorKind.INVALID_RESPONSE:
             return "LeetCode 接口数据结构异常，可能是接口变更"
+        case ClientErrorKind.GRAPHQL_ERROR:
+            return "LeetCode GraphQL 接口返回错误，请确认题目、权限或登录状态后重试"
         case ClientErrorKind.UNAUTHORIZED:
             return "登录态无效或已过期，请重新执行 lc login"
         case ClientErrorKind.MISSING_CSRF:

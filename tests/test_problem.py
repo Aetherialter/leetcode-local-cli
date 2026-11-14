@@ -55,10 +55,72 @@ def test_normalize_problem_detail_tolerates_malformed_optional_lists() -> None:
             "questionFrontendId": "1",
             "questionId": "1",
             "title": "Two Sum",
+            "titleSlug": "two-sum",
             "topicTags": None,
             "codeSnippets": None,
         }
     )
 
     assert detail.tags == ()
+    assert detail.python_code is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"questionId": "1", "title": "Two Sum", "titleSlug": "two-sum"},
+        {
+            "questionFrontendId": "",
+            "questionId": "1",
+            "title": "Two Sum",
+            "titleSlug": "two-sum",
+        },
+        {
+            "questionFrontendId": 1,
+            "questionId": "1",
+            "title": "Two Sum",
+            "titleSlug": "two-sum",
+        },
+        {"questionFrontendId": "1", "title": "Two Sum", "titleSlug": "two-sum"},
+        {
+            "questionFrontendId": "1",
+            "questionId": " ",
+            "title": "Two Sum",
+            "titleSlug": "two-sum",
+        },
+        {"questionFrontendId": "1", "questionId": "1", "titleSlug": "two-sum"},
+        {
+            "questionFrontendId": "1",
+            "questionId": "1",
+            "title": "   ",
+            "translatedTitle": "",
+            "titleSlug": "two-sum",
+        },
+        {"questionFrontendId": "1", "questionId": "1", "title": "Two Sum"},
+        {
+            "questionFrontendId": "1",
+            "questionId": "1",
+            "title": "Two Sum",
+            "titleSlug": " ",
+        },
+    ],
+)
+def test_normalize_problem_detail_rejects_missing_or_invalid_identity_fields(
+    raw,
+) -> None:
+    with pytest.raises(ValueError):
+        normalize_problem_detail(raw)
+
+
+def test_normalize_problem_detail_treats_blank_python_snippet_as_missing() -> None:
+    detail = normalize_problem_detail(
+        {
+            "questionFrontendId": "1",
+            "questionId": "1",
+            "translatedTitle": "两数之和",
+            "titleSlug": "two-sum",
+            "codeSnippets": [{"langSlug": "python3", "code": "   "}],
+        }
+    )
+
     assert detail.python_code is None

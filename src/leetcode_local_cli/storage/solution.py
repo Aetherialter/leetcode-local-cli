@@ -1,3 +1,5 @@
+import io
+import tokenize
 from importlib.resources import files
 from pathlib import Path
 
@@ -84,29 +86,71 @@ def write_solution_file(
         raise WorkspaceError(str(exc)) from exc
 
 
+def _collect_standalone_lc_comments(content: str) -> list[tuple[int, str]]:
+    """Collect standalone `# @lc ...` comments outside f-strings and strings."""
+    comments: list[tuple[int, str]] = []
+    fstring_depth = 0
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(content).readline):
+            if token.type == tokenize.FSTRING_START:
+                fstring_depth += 1
+                continue
+            if token.type == tokenize.FSTRING_END:
+                fstring_depth = max(0, fstring_depth - 1)
+                continue
+            if token.type != tokenize.COMMENT or fstring_depth > 0:
+                continue
+            line_text = token.line
+            if line_text[: token.start[1]].strip() or line_text[token.end[1] :].strip():
+                continue
+            comment = token.string.strip()
+            if comment.startswith(METADATA_PREFIX):
+                comments.append((token.start[0], comment))
+    except tokenize.TokenError as exc:
+        message = exc.args[0] if exc.args else ""
+        if (
+            fstring_depth > 0
+            or not isinstance(message, str)
+            or not message.startswith("unexpected EOF in multi-line statement")
+        ):
+            raise WorkspaceError(
+                "solution.py 存在未闭合字符串或词法错误，无法解析提交区域"
+            ) from exc
+    except IndentationError as exc:
+        raise WorkspaceError("solution.py 存在缩进错误，无法解析提交区域") from exc
+    if fstring_depth > 0:
+        raise WorkspaceError("solution.py 存在未闭合字符串或词法错误，无法解析提交区域")
+    return comments
+
+
 def _parse_solution_submission_content(content: str) -> tuple[ProblemMetadata, str]:
-    metadata: dict[str, str] = {}
-    start_flag = end_flag = False
-    submission_lines: list[str] = []
-    for string in content.splitlines(keepends=True):
-        line = string.strip()
-        if line == END_FLAG:
-            end_flag = True
-            break
-        if start_flag:
-            submission_lines.append(string)
-        if line.startswith(METADATA_PREFIX):
-            item = line.removeprefix(METADATA_PREFIX)
-            key, separator, value = item.partition(":")
-            if separator:
-                metadata[key.strip()] = value.strip()
-        if line == START_FLAG:
-            start_flag = True
+    comments = _collect_standalone_lc_comments(content)
+    begin_lines = [lineno for lineno, text in comments if text == START_FLAG]
+    end_lines = [lineno for lineno, text in comments if text == END_FLAG]
 
-    if not start_flag or not end_flag:
+    if not begin_lines or not end_lines:
         raise WorkspaceError("solution.py 提交区域标记不完整，请先执行 lc solve <题号>")
+    if len(begin_lines) > 1 or len(end_lines) > 1:
+        raise WorkspaceError("solution.py 存在重复的提交区域标记，请保留唯一一对标记")
 
-    submission_code = "".join(submission_lines).strip()
+    begin_line = begin_lines[0]
+    end_line = end_lines[0]
+    if begin_line >= end_line:
+        raise WorkspaceError(
+            "solution.py 提交区域标记顺序无效，请检查 # @lc submit_begin 与 # @lc submit_end"
+        )
+
+    metadata: dict[str, str] = {}
+    for lineno, text in comments:
+        if lineno >= begin_line:
+            break
+        item = text.removeprefix(METADATA_PREFIX)
+        key, separator, value = item.partition(":")
+        if separator:
+            metadata[key.strip()] = value.strip()
+
+    lines = io.StringIO(content).readlines()
+    submission_code = "".join(lines[begin_line : end_line - 1]).strip()
     if not submission_code:
         raise WorkspaceError("solution.py 提交区域为空")
 

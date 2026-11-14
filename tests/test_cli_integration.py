@@ -439,3 +439,159 @@ def test_doctor_reads_session_once(isolated_user, requests, monkeypatch) -> None
     assert report.ok
     assert reads == [isolated_user.session_file]
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    "bad_editor",
+    ["invalid/relative", "", "bad\ncmd"],
+)
+def test_solve_invalid_editor_option_returns_usage_exit_code_2(
+    isolated_user, requests, tmp_path, bad_editor
+) -> None:
+    initialize_workspace(tmp_path, user_config_file=isolated_user.user_config_file)
+    save_session(
+        Session(Credentials("synthetic-session", "synthetic-csrf")),
+        isolated_user.session_file,
+    )
+
+    result = CliRunner().invoke(app, ["solve", "1", "--editor", bad_editor])
+
+    assert result.exit_code == 2, result.output
+    assert "--editor" in unstyle(result.output)
+    assert not requests
+
+
+def test_solve_corrupted_config_editor_returns_operational_exit_code_1(
+    isolated_user, requests, tmp_path
+) -> None:
+    initialize_workspace(tmp_path, user_config_file=isolated_user.user_config_file)
+    save_session(
+        Session(Credentials("synthetic-session", "synthetic-csrf")),
+        isolated_user.session_file,
+    )
+    isolated_user.user_config_file.write_text(
+        'version = 1\ndefault_site = "cn"\n[editor]\ncommand = "bad/rel"\n',
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["solve", "1"])
+
+    assert result.exit_code == 1, result.output
+    assert not requests
+
+
+def test_get_reports_graphql_error_without_leaking_raw_server_message(
+    isolated_user, monkeypatch
+) -> None:
+    save_session(
+        Session(Credentials("synthetic-session", "synthetic-csrf")),
+        isolated_user.session_file,
+    )
+    sentinel = "SECRET_SERVER_TRACE_TOKEN"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload.get("operationName") == "problemsetQuestionList":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "problemsetQuestionList": {
+                            "total": 1,
+                            "questions": [
+                                {
+                                    "frontendQuestionId": "1",
+                                    "title": "Two Sum",
+                                    "titleSlug": "two-sum",
+                                    "difficulty": "Easy",
+                                    "paidOnly": False,
+                                    "topicTags": [],
+                                }
+                            ],
+                        }
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": {"question": None},
+                "errors": [{"message": sentinel}],
+            },
+        )
+
+    factory = partial(LeetCodeClient, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(problems, "LeetCodeClient", factory)
+
+    result = CliRunner().invoke(app, ["get", "1"])
+
+    assert result.exit_code == 1, result.output
+    output = unstyle(result.output)
+    assert "GraphQL" in output
+    assert sentinel not in output
+
+
+def test_missing_python_snippet_allows_get_and_blocks_solve(
+    isolated_user, tmp_path, monkeypatch
+) -> None:
+    workspace = initialize_workspace(
+        tmp_path, user_config_file=isolated_user.user_config_file
+    )
+    original_solution = workspace.paths.solution_file.read_bytes()
+    save_session(
+        Session(Credentials("synthetic-session", "synthetic-csrf")),
+        isolated_user.session_file,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload.get("operationName") == "problemsetQuestionList":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "problemsetQuestionList": {
+                            "total": 1,
+                            "questions": [
+                                {
+                                    "frontendQuestionId": "1",
+                                    "title": "Database Only",
+                                    "titleSlug": "database-only",
+                                    "difficulty": "Easy",
+                                    "paidOnly": False,
+                                    "topicTags": [],
+                                }
+                            ],
+                        }
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "question": {
+                        "questionId": "175",
+                        "questionFrontendId": "1",
+                        "title": "Database Only",
+                        "titleSlug": "database-only",
+                        "difficulty": "Easy",
+                        "content": "<p>SQL</p>",
+                        "topicTags": [],
+                        "codeSnippets": [{"langSlug": "mysql", "code": "SELECT 1"}],
+                    }
+                }
+            },
+        )
+
+    factory = partial(LeetCodeClient, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(problems, "LeetCodeClient", factory)
+
+    get_result = CliRunner().invoke(app, ["get", "1"])
+    assert get_result.exit_code == 0, get_result.output
+    assert "Python3" in unstyle(get_result.output)
+
+    solve_result = CliRunner().invoke(app, ["solve", "1", "--no-open"])
+    assert solve_result.exit_code == 1, solve_result.output
+    assert "Python3" in unstyle(solve_result.output)
+    assert workspace.paths.solution_file.read_bytes() == original_solution

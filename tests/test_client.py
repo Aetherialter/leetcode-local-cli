@@ -291,3 +291,176 @@ def test_client_methods_reject_non_dict_success_data(
         result = getattr(client, method_name)(*args)
 
     assert result.error is ClientErrorKind.INVALID_RESPONSE
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args", "payload"),
+    [
+        (
+            "user_status",
+            (),
+            {
+                "errors": [{"message": "SECRET_TRACE"}],
+                "data": {"userStatus": {"isSignedIn": True, "username": "alice"}},
+            },
+        ),
+        (
+            "problem_list",
+            (),
+            {
+                "errors": [{"message": "SECRET_TRACE"}],
+                "data": {"problemsetQuestionList": {"total": 0, "questions": []}},
+            },
+        ),
+        (
+            "problem_detail",
+            ("two-sum",),
+            {
+                "errors": [{"message": "SECRET_TRACE"}],
+                "data": {
+                    "question": {
+                        "questionId": "1",
+                        "questionFrontendId": "1",
+                        "title": "Two Sum",
+                        "titleSlug": "two-sum",
+                    }
+                },
+            },
+        ),
+        (
+            "problem_detail",
+            ("two-sum",),
+            {"errors": [{"message": "SECRET_TRACE"}], "data": None},
+        ),
+        (
+            "problem_detail",
+            ("two-sum",),
+            {"errors": [{"message": "SECRET_TRACE"}]},
+        ),
+    ],
+)
+def test_graphql_rejects_errors_even_with_http_200_and_partial_data(
+    method_name,
+    args,
+    payload,
+) -> None:
+    with _client_with_transport(
+        lambda request: httpx.Response(200, request=request, json=payload),
+    ) as client:
+        result = getattr(client, method_name)(*args)
+
+    assert not result.ok
+    assert result.error is ClientErrorKind.GRAPHQL_ERROR
+
+
+def test_graphql_tolerates_empty_errors_list_and_rejects_malformed_errors() -> None:
+    with _client_with_transport(
+        lambda request: httpx.Response(
+            200,
+            request=request,
+            json={"errors": [], "data": {"userStatus": {"isSignedIn": False}}},
+        ),
+    ) as client:
+        ok_result = client.user_status()
+    assert ok_result.ok
+
+    with _client_with_transport(
+        lambda request: httpx.Response(
+            200,
+            request=request,
+            json={
+                "errors": "unexpected-string",
+                "data": {"userStatus": {"isSignedIn": False}},
+            },
+        ),
+    ) as client:
+        bad_result = client.user_status()
+    assert bad_result.error is ClientErrorKind.INVALID_RESPONSE
+
+
+@pytest.mark.parametrize(
+    "question_payload",
+    [
+        {},
+        {
+            "questionId": "1",
+            "title": "Two Sum",
+            "titleSlug": "two-sum",
+        },
+        {
+            "questionFrontendId": "   ",
+            "questionId": "1",
+            "title": "Two Sum",
+            "titleSlug": "two-sum",
+        },
+        {
+            "questionFrontendId": "1",
+            "questionId": "",
+            "title": "Two Sum",
+            "titleSlug": "two-sum",
+        },
+        {
+            "questionFrontendId": "1",
+            "questionId": "1",
+            "title": "",
+            "translatedTitle": None,
+            "titleSlug": "two-sum",
+        },
+        {
+            "questionFrontendId": "1",
+            "questionId": "1",
+            "title": "Two Sum",
+            "titleSlug": "",
+        },
+    ],
+)
+def test_problem_detail_rejects_missing_required_identity_fields(
+    question_payload,
+) -> None:
+    with _client_with_transport(
+        lambda request: httpx.Response(
+            200,
+            request=request,
+            json={"data": {"question": question_payload}},
+        ),
+    ) as client:
+        result = client.problem_detail("two-sum")
+
+    assert result.error is ClientErrorKind.INVALID_RESPONSE
+
+
+def test_problem_detail_allows_missing_optional_fields_and_python_snippet() -> None:
+    with _client_with_transport(
+        lambda request: httpx.Response(
+            200,
+            request=request,
+            json={
+                "data": {
+                    "question": {
+                        "questionFrontendId": "1",
+                        "questionId": "1",
+                        "title": "Two Sum",
+                        "titleSlug": "two-sum",
+                        "difficulty": None,
+                        "content": None,
+                        "translatedContent": None,
+                        "topicTags": None,
+                        "codeSnippets": [
+                            {"langSlug": "cpp", "code": "class Solution {};"}
+                        ],
+                    }
+                }
+            },
+        ),
+    ) as client:
+        result = client.problem_detail("two-sum")
+
+    assert isinstance(result, ClientSuccess)
+    assert result.data.question_id == "1"
+    assert result.data.submit_question_id == "1"
+    assert result.data.title == "Two Sum"
+    assert result.data.title_slug == "two-sum"
+    assert result.data.difficulty == ""
+    assert result.data.content_html == ""
+    assert result.data.tags == ()
+    assert result.data.python_code is None

@@ -564,3 +564,131 @@ def test_chrome_devtools_discovery_rejects_missing_page_target(monkeypatch) -> N
 
     with pytest.raises(auth.DevToolsError, match="没有可用页面"):
         auth._get_page_debugger_url(9222)
+
+
+def test_browser_endpoint_enforces_monotonic_deadline_for_recv_and_polling(
+    monkeypatch,
+) -> None:
+    now = 100.0
+    recv_timeouts: list[float] = []
+    sleeps: list[float] = []
+    responses = iter(
+        [
+            {"id": 101, "result": {"product": "Chrome/150.0"}},
+            {
+                "id": 102,
+                "result": {
+                    "targetInfos": [
+                        {
+                            "targetId": "leetcode-page",
+                            "type": "page",
+                            "url": "https://leetcode.cn/",
+                        }
+                    ]
+                },
+            },
+            {"id": 103, "result": {"sessionId": "chrome-session"}},
+            {"id": 104, "result": {"cookies": []}},
+        ]
+    )
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def send(self, message):
+            pass
+
+        def recv(self, *, timeout):
+            nonlocal now
+            recv_timeouts.append(timeout)
+            now += 2.5
+            return json.dumps(next(responses))
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    monkeypatch.setattr(auth, "monotonic", fake_monotonic)
+    monkeypatch.setattr(auth, "sleep", fake_sleep)
+    monkeypatch.setattr(auth, "connect", lambda *args, **kwargs: FakeConnection())
+
+    with pytest.raises(auth.DevToolsError, match="未找到有效的 LeetCode 登录 Cookie"):
+        auth.get_cookies_from_browser_endpoint(
+            "ws://127.0.0.1:9222/devtools/browser/example",
+            expected_port=9222,
+            expected_browser_prefixes=("Chrome/",),
+            timeout_seconds=10.2,
+        )
+
+    assert recv_timeouts == pytest.approx([10.2, 7.7, 5.2, 2.7])
+    assert sleeps == pytest.approx([0.2])
+
+
+def test_browser_endpoint_stops_polling_when_handshake_exhausts_budget(
+    monkeypatch,
+) -> None:
+    now = 0.0
+    sent_methods: list[str] = []
+    responses = iter(
+        [
+            {"id": 101, "result": {"product": "Chrome/150.0"}},
+            {
+                "id": 102,
+                "result": {
+                    "targetInfos": [
+                        {
+                            "targetId": "leetcode-page",
+                            "type": "page",
+                            "url": "https://leetcode.cn/",
+                        }
+                    ]
+                },
+            },
+            {"id": 103, "result": {"sessionId": "chrome-session"}},
+        ]
+    )
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def send(self, message):
+            sent_methods.append(json.loads(message)["method"])
+
+        def recv(self, *, timeout):
+            nonlocal now
+            now += 1.0
+            return json.dumps(next(responses))
+
+    monkeypatch.setattr(auth, "monotonic", lambda: now)
+    monkeypatch.setattr(
+        auth,
+        "sleep",
+        lambda seconds: pytest.fail("must not sleep after handshake exhausted budget"),
+    )
+    monkeypatch.setattr(auth, "connect", lambda *args, **kwargs: FakeConnection())
+
+    with pytest.raises(auth.DevToolsError, match="未找到有效的 LeetCode 登录 Cookie"):
+        auth.get_cookies_from_browser_endpoint(
+            "ws://127.0.0.1:9222/devtools/browser/example",
+            expected_port=9222,
+            expected_browser_prefixes=("Chrome/",),
+            timeout_seconds=3.0,
+        )
+
+    assert sent_methods == [
+        "Browser.getVersion",
+        "Target.getTargets",
+        "Target.attachToTarget",
+    ]

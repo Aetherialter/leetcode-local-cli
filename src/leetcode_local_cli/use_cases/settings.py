@@ -19,12 +19,15 @@ from leetcode_local_cli.use_cases.errors import ErrorCode, UseCaseError
 
 
 def get_editor(paths: UserPaths, override: str | None = None) -> EditorConfig | None:
-    try:
-        if override is not None:
+    if override is not None:
+        try:
             return EditorConfig(override)
+        except ValueError as exc:
+            raise UseCaseError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
+    try:
         config = load_user_config(paths.user_config_file)
         return config.editor if config else None
-    except (ConfigError, ValueError) as exc:
+    except ConfigError as exc:
         raise UseCaseError(str(exc), code=ErrorCode.WORKSPACE_CONFIG) from exc
 
 

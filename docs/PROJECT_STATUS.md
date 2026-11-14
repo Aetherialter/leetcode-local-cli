@@ -23,6 +23,11 @@
 - 编辑器参数补齐 TOML 控制字符转义，用户配置在原子替换前验证 UTF-8、TOML 与结构；序列化或替换失败保留原件。
 - 普通与延迟注解一致拒绝包含引号的嵌套节点类型，`Literal` 取值与 `Annotated` 元数据不误判为类型引用；worker 超时后的重启加载错误保留行号与可选调用栈，后续输入仍可恢复。
 - 发布工作流的三平台前置任务补齐 wheel/sdist 完整隔离安装验收，覆盖配置、初始化及节点调用；发布任务仍复验它自身构建的产物。已新增门禁契约测试，远端矩阵尚未执行。
+- 正确性修复：
+  - `solution.py` 提交解析改用 `tokenize` 词法扫描识别提交区域外头部 `# @lc` 元数据与独立提交标记，跟踪 f-string 嵌套深度并拒绝未闭合 f-string/字符串，忽略字符串字面量（含 f-string 内部注释）与行内注释，拒绝缺失、重复或逆序标记，且保留未闭合括号等既有语法检查策略与原文件不覆盖原则。
+  - GraphQL 请求区分 HTTP 200 与非空 `errors`（结构化映射为 `ClientErrorKind.GRAPHQL_ERROR`），不输出原始服务端错误信息；题目详情校验必需题目标识字段，缺少 Python3 模板时允许 `lc get` 查看但阻止 `lc solve` 写入 `solution.py`。
+  - DevTools 登录单次浏览器尝试共用 180 秒单调时钟 `deadline`（覆盖连接、等待、重试与轮询），打开浏览器授权页后按当前单调时钟重算剩余预算以防超时后继续等待，保留 Chrome → Edge → 手动回退的逐浏览器独立预算，并明确 `close_timeout` 与在线账号校验（10 秒超时）不在轮询硬上限内。
+  - `lc solve` 对生效的非法 `--editor` CLI 传参返回用法错误退出码 2，`--no-open` 仍优先跳过该校验；损坏的本地用户配置编辑器设置仍返回运行错误退出码 1，保存成功但编辑器启动失败仍警告并退出 0。
 
 新增能力目前属于尚未发布的源码变化，版本仍为 `0.11.0`；开发验收使用 `uv run lc`，没有修改全局工具安装。本次维护者只授权提交和推送源码，不创建版本标签或发布包。
 
@@ -65,6 +70,8 @@
 核心边界稳定后，再评估国际站、最小 Python API、系统秘密存储和编辑器集成。这些方向不是当前排期，也不授权预先引入数据库、Web、AI 或多语言运行时。
 
 ## 最近验证
+
+2026-11-14，以上四项正确性修复（含 f-string 嵌套/未闭合处理与浏览器窗口打开后剩余预算重算）通过 `uv run ruff format --check src tests scripts`（79 个文件）、`uv run ruff check src tests scripts pyproject.toml`、`uv run pyright src tests scripts`（0 errors）以及完整 Windows 测试（630 passed、18 skipped），比上轮增加 52 项回归测试与参数化用例。18 项跳过仍为本机符号链接权限限制与 POSIX/Bash 平台限定；登录预算与网络校验均采用假时钟、模拟 WebSocket 与注入 HTTP transport 完成，未启动真实浏览器、未访问真实账号、未执行远程提交或启动真实编辑器，未修改全局安装且未创建 Git 提交或标签。
 
 2026-09-07，发布前收尾补齐三平台产物门禁，通过发布/仓库卫生定向测试（26 passed、1 skipped）、Ruff format/lint、Pyright（0 errors）及完整 Windows 测试（578 passed、18 skipped）。使用 `uv build --no-sources --force-pep517` 按声明范围内的后端成功构建，未出现版本范围警告；生成的 wheel/sdist 分别通过隔离安装 smoke test。sdist 安装阶段仍走本机 uv 内置快路径并提示版本范围警告，不能将单独的 PEP 517 构建通过描述为全链路告警已消除。依赖与全局工具未修改；远端工作流、真实编辑器窗口仍未验收，未提交、推送或发布。
 

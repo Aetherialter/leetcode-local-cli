@@ -49,12 +49,37 @@ def extract_python_code(code_snippets: object) -> str | None:
             continue
         if snippet.get("langSlug") == "python3":
             code = snippet.get("code")
-            return code if isinstance(code, str) else None
+            return code if isinstance(code, str) and code.strip() else None
 
     return None
 
 
+def _optional_nonempty_str(raw: dict[str, object], key: str) -> str | None:
+    value = raw.get(key)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _require_nonempty_str(raw: dict[str, object], key: str) -> str:
+    value = _optional_nonempty_str(raw, key)
+    if value is None:
+        raise ValueError(f"missing required field: {key}")
+    return value
+
+
 def normalize_problem_detail(raw: dict[str, object]) -> ProblemDetail:
+    question_id = _require_nonempty_str(raw, "questionFrontendId")
+    submit_question_id = _require_nonempty_str(raw, "questionId")
+    title = _optional_nonempty_str(raw, "translatedTitle") or _optional_nonempty_str(
+        raw, "title"
+    )
+    if title is None:
+        raise ValueError("missing required field: title")
+    title_slug = _require_nonempty_str(raw, "titleSlug")
+
     raw_tags = raw.get("topicTags")
     tags = (
         [
@@ -73,10 +98,10 @@ def normalize_problem_detail(raw: dict[str, object]) -> ProblemDetail:
         return value if isinstance(value, str) else ""
 
     return ProblemDetail(
-        question_id=text("questionFrontendId"),
-        submit_question_id=text("questionId"),
-        title=text("translatedTitle") or text("title"),
-        title_slug=text("titleSlug"),
+        question_id=question_id,
+        submit_question_id=submit_question_id,
+        title=title,
+        title_slug=title_slug,
         difficulty=text("difficulty"),
         tags=tuple(tags),
         content_html=text("translatedContent") or text("content"),
