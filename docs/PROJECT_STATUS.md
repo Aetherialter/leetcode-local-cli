@@ -1,17 +1,17 @@
 # 项目状态
 
-当前版本是 `v0.11.0`，主题是用户状态解耦、凭据边界与职责分层。实际发布记录见 [GitHub Releases](https://github.com/Aetherialter/leetcode-local-cli/releases) 和 [PyPI](https://pypi.org/project/leetcode-local-cli/)。
+当前源码已准备版本 `v0.12.0`，主题是编辑器配置、节点本地调用与边界加固（等待维护者明确授权后打标签并触发发布；此前 GitHub Releases 与 PyPI 最新公开版本仍为 `v0.11.0`）。实际发布记录见 [GitHub Releases](https://github.com/Aetherialter/leetcode-local-cli/releases) 和 [PyPI](https://pypi.org/project/leetcode-local-cli/)。
 
 ## 当前能力
 
-- 配置单个默认工作区并安全维护 `solution.py`。
+- 配置单个默认工作区并安全维护 `solution.py`，用户配置（v2）可跨工作区保留个人编辑器设置（`lc config editor`）。
 - 通过日常 Chrome、日常 Edge 或手动 Cookie 登录 LeetCode 中文站。
-- 查询题目、生成 Python3 模板、本地调用、环境诊断和远程提交。
+- 查询题目、生成 Python3 模板、本地调用（含 `ListNode` / `TreeNode` 节点数组自动转换与可定位错误行号/可选调用栈）、环境诊断和远程提交。
 - `cli.py → commands/ → use_cases/` 与 `models / storage / integrations / execution` 已形成职责分层，依赖方向由 AST 测试约束。
 - 提交使用结构化结果和单调时钟总预算；超时或轮询失败保留 submission ID。
 - 可用 `lc check <Submission ID>` 单次重新查询已有提交，不会重复发送代码。
 
-## 未发布变化
+## v0.12.0 变化
 
 - 新增 `lc config editor`：支持 Zed、VS Code 和可执行文件路径/参数数组。用户配置不再强制含默认工作区，编辑器设置可在初始化前保存，之后 `init` 保留设置。
 - `solve --editor` 临时覆盖用户设置，`--no-open` 优先；未配置只保存并提示，不再使用可能执行 `.py` 的系统文件关联。显式编辑器失败仍为保存成功加警告。
@@ -19,17 +19,16 @@
 - 节点支持限定为整数值、无环单链表和普通二叉树；拒绝环、共享节点身份、嵌套集合及超限输入输出，不扩展到复杂节点或设计题协议。
 - 本地异常增加用户代码行号；`test --verbose` 提供不采集局部变量的调用栈，JSON Lines 增加对应结构化字段。
 - wheel/sdist 隔离 smoke test 新增编辑器设置跨初始化保留、节点模板资源和树数组调用验证。
-- 审查修复：用户配置独立写为 v2，marker 保持 v1、Session 不变；已有 v1 用户配置只读可用，显式设置/清除编辑器或初始化时才升级，防止旧版误用修复流程丢失新版字段。
+- 用户配置独立写为 v2，marker 保持 v1、Session 不变；已有 v1 用户配置只读可用，显式设置/清除编辑器或初始化时才升级，防止旧版误用修复流程丢失新版字段。
 - 编辑器参数补齐 TOML 控制字符转义，用户配置在原子替换前验证 UTF-8、TOML 与结构；序列化或替换失败保留原件。
 - 普通与延迟注解一致拒绝包含引号的嵌套节点类型，`Literal` 取值与 `Annotated` 元数据不误判为类型引用；worker 超时后的重启加载错误保留行号与可选调用栈，后续输入仍可恢复。
-- 发布工作流的三平台前置任务补齐 wheel/sdist 完整隔离安装验收，覆盖配置、初始化及节点调用；发布任务仍复验它自身构建的产物。已新增门禁契约测试，远端矩阵尚未执行。
-- 正确性修复：
+- 发布工作流的三平台前置任务补齐 wheel/sdist 完整隔离安装验收，覆盖配置、初始化及节点调用；发布任务仍复验它自身构建的产物。
+- 正确性加固：
   - `solution.py` 提交解析改用 `tokenize` 词法扫描识别提交区域外头部 `# @lc` 元数据与独立提交标记，跟踪 f-string 嵌套深度并拒绝未闭合 f-string/字符串，忽略字符串字面量（含 f-string 内部注释）与行内注释，拒绝缺失、重复或逆序标记，且保留未闭合括号等既有语法检查策略与原文件不覆盖原则。
   - GraphQL 请求区分 HTTP 200 与非空 `errors`（结构化映射为 `ClientErrorKind.GRAPHQL_ERROR`），不输出原始服务端错误信息；题目详情校验必需题目标识字段，缺少 Python3 模板时允许 `lc get` 查看但阻止 `lc solve` 写入 `solution.py`。
   - DevTools 登录单次浏览器尝试共用 180 秒单调时钟 `deadline`（覆盖连接、等待、重试与轮询），打开浏览器授权页后按当前单调时钟重算剩余预算以防超时后继续等待，保留 Chrome → Edge → 手动回退的逐浏览器独立预算，并明确 `close_timeout` 与在线账号校验（10 秒超时）不在轮询硬上限内。
   - `lc solve` 对生效的非法 `--editor` CLI 传参返回用法错误退出码 2，`--no-open` 仍优先跳过该校验；损坏的本地用户配置编辑器设置仍返回运行错误退出码 1，保存成功但编辑器启动失败仍警告并退出 0。
-
-新增能力目前属于尚未发布的源码变化，版本仍为 `0.11.0`；开发验收使用 `uv run lc`，没有修改全局工具安装。本次维护者只授权提交和推送源码，不创建版本标签或发布包。
+  - 修复 Linux/macOS 纳秒级 `monotonic()` 导致的既有 `test_cli.py` 授权端点测试浮点严格相等失败，完成 `v0.12.0` 版本与发布说明整理（见 [v0.12.0 Release Notes](release-notes/v0.12.0.md)）。
 
 用户命令和限制见 [README](../README.md)，模块结构见 [ARCHITECTURE](ARCHITECTURE.md)。
 
@@ -49,10 +48,14 @@
 
 ## 当前优先级
 
-1. **新版体验收尾**：维护者方便时确认真实 Zed 窗口打开行为；本轮按要求不干扰其他项目，没有启动编辑器或操作浏览器。
-2. **准备下一版发布**：审查问题已修复，本地门禁和产物验收通过，三平台发布产物门禁已补齐；本次仅提交推送源码并检查普通 CI，整理新版本、标签发布与公共安装验收另需明确授权。本地检查不能替代远端平台结果。
+1. **当前版本发布收尾**：核实对应提交的三平台 CI、构建和两种产物安装；整理版本与发布说明；获得发布授权后完成发布和公开安装验证。（当前进度：`v0.12.0` 版本号、Release Notes、本地门禁及双产物隔离安装已就绪，待维护者授权打标签发布与公开安装验证。）
+2. **示例输入回放**：支持当前题目的示例输入复用，沿用现有 worker；明确只报告调用结果，不宣称答案正确。
+3. **系统凭据存储**：先确定平台支持、存储不可用时的行为及旧 Session 处置，再单独实现和验收。
+4. **查询缓存**：先测量请求次数与耗时，再决定缓存范围、容量和失效规则。
 
-低优先级候选：Broken Pipe、合法空分页、Python 小版本范围、复杂节点协议和依赖审计。
+暂缓：**国际站适配器、设计题协议**（等真实需求成立，再调整产品边界）。
+
+低优先级候选：Broken Pipe、合法空分页、Python 小版本范围和依赖审计。
 
 ## 已知风险
 
@@ -70,6 +73,8 @@
 核心边界稳定后，再评估国际站、最小 Python API、系统秘密存储和编辑器集成。这些方向不是当前排期，也不授权预先引入数据库、Web、AI 或多语言运行时。
 
 ## 最近验证
+
+2026-11-14，`v0.12.0` 发布准备：针对提交 `9c7a4f2` 在 Ubuntu/macOS CI（645 passed、1 skipped）中暴露的 2 项 `test_cli.py` 纳秒级 `monotonic()` 严格相等断言失败补齐固定假时钟与 `pytest.approx`，完成 `pyproject.toml` / `uv.lock`（`0.12.0`）、`README.md`、`docs/release-notes/v0.12.0.md` 与路线图同步。本地通过 `uv run ruff format --check src tests scripts`（79 个文件）、`uv run ruff check src tests scripts pyproject.toml`、`uv run pyright src tests scripts`（0 errors）、完整 Windows 测试（630 passed、18 skipped）、`uv run lc --version`（`leetcode-local-cli 0.12.0`）与 `--help`。分别通过 `uv build --no-sources` 与 `uv build --no-sources --force-pep517` 成功构建 `0.12.0` wheel 与 sdist（`--force-pep517` 无后端范围警告；直接 `uv build --no-sources` 与 sdist 隔离安装阶段因本机 `uv 0.13.7` 超出 `uv_build <0.12.0` 声明范围给出版本警告），两种产物均通过 `scripts/smoke_test.py` 隔离安装验收。未创建标签或发布，未修改全局工具安装，未访问真实账号、启动真实浏览器或本地编辑器；推送后等待三平台 `ci.yml` 复验。
 
 2026-11-14，以上四项正确性修复（含 f-string 嵌套/未闭合处理与浏览器窗口打开后剩余预算重算）通过 `uv run ruff format --check src tests scripts`（79 个文件）、`uv run ruff check src tests scripts pyproject.toml`、`uv run pyright src tests scripts`（0 errors）以及完整 Windows 测试（630 passed、18 skipped），比上轮增加 52 项回归测试与参数化用例。18 项跳过仍为本机符号链接权限限制与 POSIX/Bash 平台限定；登录预算与网络校验均采用假时钟、模拟 WebSocket 与注入 HTTP transport 完成，未启动真实浏览器、未访问真实账号、未执行远程提交或启动真实编辑器，未修改全局安装且未创建 Git 提交或标签。
 

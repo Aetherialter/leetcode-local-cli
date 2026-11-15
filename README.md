@@ -2,7 +2,7 @@
 
 面向 LeetCode 中文站的轻量本地刷题 CLI：配置一个工作区，通过 Chrome、Edge 或手动 Cookie 登录，在线获取题目，在 `solution.py` 中解题并进行本地调用、诊断和远程提交。
 
-最近发布版本：`v0.11.0`。本文也记录当前源码中尚未发布的编辑器配置、节点转换和详细错误功能；这些新增命令需在源码目录使用 `uv run lc ...`。发布记录见 [GitHub Releases](https://github.com/Aetherialter/leetcode-local-cli/releases)。
+本文对应版本：`v0.12.0`。发布记录见 [GitHub Releases](https://github.com/Aetherialter/leetcode-local-cli/releases)。
 
 开发本地源码使用 `uv sync --locked --all-groups`，随后用 `uv run lc ...`；未激活虚拟环境或安装全局工具时，裸 `lc` 不一定可用。
 
@@ -13,13 +13,13 @@
 Linux / macOS：
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/Aetherialter/leetcode-local-cli/v0.11.0/scripts/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/Aetherialter/leetcode-local-cli/v0.12.0/scripts/install.sh | sh
 ```
 
 Windows PowerShell：
 
 ```powershell
-powershell -ExecutionPolicy ByPass -Command "irm https://raw.githubusercontent.com/Aetherialter/leetcode-local-cli/v0.11.0/scripts/install.ps1 | iex"
+powershell -ExecutionPolicy ByPass -Command "irm https://raw.githubusercontent.com/Aetherialter/leetcode-local-cli/v0.12.0/scripts/install.ps1 | iex"
 ```
 
 也可以直接安装并初始化：
@@ -101,7 +101,7 @@ uv run lc init D:/Projects/leetcode-local-cli --repair --yes
 
 编辑器属于当前用户的个人设置，存入用户配置目录的 `config.toml`，不存入工作区 marker 或 Session。尚未初始化时也可设置；之后初始化或切换默认工作区会保留它。
 
-用户配置格式现为 v2，工作区 marker 仍为 v1，Session 格式不变。已有 v1 用户配置（含内测编辑器设置）可继续读取，读取不改写文件；显式设置/清除编辑器或执行 `init` 时才保存为 v2。也可用 `uv run lc config editor zed` 保存并升级。升级后旧版 `lc` 会拒绝该配置，不能用旧版 `init --repair` 降级；开发期间请统一使用 `uv run lc`。
+用户配置格式现为 v2，工作区 marker 仍为 v1，Session 格式不变。已有 v1 用户配置（含内测编辑器设置）可继续读取，读取不改写文件；显式设置/清除编辑器或执行 `init` 时才保存为 v2。也可用 `lc config editor zed` 保存并升级。升级后旧版 `lc` 会拒绝该配置，不能用旧版 `init --repair` 降级。
 
 ```shell
 lc config editor zed

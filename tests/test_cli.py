@@ -504,6 +504,7 @@ def test_authorized_browser_login_uses_existing_authorization_without_opening_pa
         port=53127,
         debugger_url="ws://127.0.0.1:53127/devtools/browser/example",
     )
+    monkeypatch.setattr(login_use_case, "monotonic", lambda: 100.0)
     monkeypatch.setattr(
         login_use_case,
         "read_browser_devtools_endpoint",
@@ -544,7 +545,9 @@ def test_authorized_browser_login_uses_existing_authorization_without_opening_pa
             {
                 "expected_port": endpoint.port,
                 "expected_browser_prefixes": prefixes,
-                "timeout_seconds": login_use_case.BROWSER_LOGIN_TIMEOUT_SECONDS,
+                "timeout_seconds": pytest.approx(
+                    login_use_case.BROWSER_LOGIN_TIMEOUT_SECONDS
+                ),
             },
         ),
         ("save", cookies, source),
