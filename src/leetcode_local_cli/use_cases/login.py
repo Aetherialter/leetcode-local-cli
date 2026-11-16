@@ -92,6 +92,8 @@ def validate_and_save_login(
     with LeetCodeClient(cookies) as client:
         status_result = client.user_status()
         if isinstance(status_result, ClientFailure):
+            if status_result.error is ClientErrorKind.UNAUTHORIZED:
+                return False
             raise UseCaseError(
                 client_error_message(status_result.error), code=ErrorCode.CLIENT
             )

@@ -1,3 +1,4 @@
+import sys
 from getpass import getpass
 from pathlib import Path
 from typing import Annotated
@@ -63,7 +64,21 @@ def login(
     _login_manually(paths.session_file)
 
 
+def _is_interactive_stdin() -> bool:
+    if sys.stdin is None:
+        return False
+    try:
+        return sys.stdin.isatty()
+    except ValueError:
+        return False
+
+
 def _login_manually(session_file: Path) -> None:
+    if not _is_interactive_stdin():
+        warning(
+            "当前为非交互式终端，无法安全读取手动 Cookie；请在交互式终端中执行 lc login"
+        )
+        raise Exit(1)
     warning("无法自动获取 LeetCode 登录状态，请手动粘贴 Cookie")
     manual_cookies = get_cookies_from_input()
     if not manual_cookies:
@@ -102,4 +117,8 @@ def profile() -> None:
 
 
 def get_cookies_from_input() -> dict[str, str] | None:
-    return parse_cookie_header(getpass("请粘贴 Cookie（输入内容不会回显）：\n"))
+    try:
+        raw_cookie = getpass("请粘贴 Cookie（输入内容不会回显）：\n")
+    except EOFError:
+        return None
+    return parse_cookie_header(raw_cookie)

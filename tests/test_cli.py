@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from contextlib import nullcontext
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -1468,3 +1469,102 @@ def test_authorized_browser_login_clamps_delay_using_remaining_after_open(
     assert recorded_sleeps[0] == pytest.approx(0.8)
     assert len(recorded_timeouts) == 1
     assert recorded_timeouts[0] == pytest.approx(180.0)
+
+
+def test_is_interactive_stdin_handles_none_and_closed_stream(monkeypatch) -> None:
+    monkeypatch.setattr(account_commands.sys, "stdin", None)
+    assert account_commands._is_interactive_stdin() is False
+
+    closed_stream = StringIO()
+    closed_stream.close()
+    monkeypatch.setattr(account_commands.sys, "stdin", closed_stream)
+    assert account_commands._is_interactive_stdin() is False
+
+
+def test_manual_login_fails_fast_without_getpass_when_stdin_is_not_tty(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        account_commands, "try_automatic_login", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        account_commands,
+        "getpass",
+        lambda *args, **kwargs: pytest.fail("getpass must not run without TTY"),
+    )
+
+    result = runner.invoke(
+        cli.app, ["login"], input="LEETCODE_SESSION=s; csrftoken=c\n"
+    )
+
+    assert result.exit_code == 1
+    output = unstyle(result.output)
+    assert "非交互式终端" in output
+    assert "Traceback" not in result.output
+
+
+def test_manual_login_handles_eof_error_cleanly_in_interactive_tty(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        account_commands, "try_automatic_login", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(account_commands, "_is_interactive_stdin", lambda: True)
+
+    def raise_eof(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr(account_commands, "getpass", raise_eof)
+
+    result = runner.invoke(cli.app, ["login"])
+
+    assert result.exit_code == 1
+    assert "未获取有效 Cookie" in unstyle(result.output)
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("valid", "expected_exit_code", "expected_text"),
+    [
+        (True, 0, "成功登录"),
+        (False, 1, "Cookie 无效或已过期"),
+    ],
+)
+def test_manual_login_validates_and_saves_in_interactive_tty(
+    configured_app_paths,
+    monkeypatch,
+    valid: bool,
+    expected_exit_code: int,
+    expected_text: str,
+) -> None:
+    received: list[tuple[dict[str, str], str, Path]] = []
+
+    monkeypatch.setattr(
+        account_commands, "try_automatic_login", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(account_commands, "_is_interactive_stdin", lambda: True)
+    monkeypatch.setattr(
+        account_commands,
+        "getpass",
+        lambda _prompt: "LEETCODE_SESSION=s1; csrftoken=c1",
+    )
+
+    def fake_validate(
+        cookies: dict[str, str], *, source: str, session_file: Path
+    ) -> bool:
+        received.append((cookies, source, session_file))
+        return valid
+
+    monkeypatch.setattr(account_commands, "validate_and_save_login", fake_validate)
+
+    result = runner.invoke(cli.app, ["login"])
+
+    assert result.exit_code == expected_exit_code
+    assert expected_text in unstyle(result.output)
+    assert received == [
+        (
+            {"LEETCODE_SESSION": "s1", "csrftoken": "c1"},
+            "manual",
+            configured_app_paths.user.session_file,
+        )
+    ]

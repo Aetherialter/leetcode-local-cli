@@ -14,7 +14,7 @@
 - 用户配置写入版本独立为 v2，工作区 marker 保持 v1，Session 不变。支持只读现有 v1 用户配置（含内测编辑器设置）；显式设置/清除编辑器或初始化时保留适用字段并写入 v2，不进行读取时迁移。不支持的未来版本仍先拒绝，`--repair` 不降级配置。
 - `solution.py` 只接受 UTF-8 或 UTF-8 BOM；其他编码不猜测、不改写、不执行也不提交。
 - `solution.py` 提交区域通过 Python 词法扫描识别独立的 `# @lc submit_begin` / `# @lc submit_end` 标记并忽略字符串字面量内文本；`# @lc` 元数据只从提交区域之前的头部读取，拒绝缺失、重复或逆序标记，且不自动修复或覆盖用户文件。
-- GraphQL 请求区分 HTTP 成功与业务成功，显式拒绝非空 `errors` 且不输出原始服务端响应；题目详情校验必需题目标识字段，缺少 Python3 模板时允许 `lc get` 查看但阻止 `lc solve` 写入 `solution.py`。
+- GraphQL 与 REST 请求区分 HTTP 成功、业务成功与鉴权/权限失败：GraphQL 显式拒绝非空 `errors`，不输出原始服务端响应；HTTP `401` 及已确认的 GraphQL 认证失效错误码（`extensions.code == "UNAUTHENTICATED"`）映射为认证失效（提示执行 `lc login`），HTTP `403` 及对应权限错误码（`FORBIDDEN` / `PERMISSION_DENIED`）映射为权限拒绝（提示检查账号权限或登录状态，不保证重新登录必然解决），其他 GraphQL 错误保留通用提示。题目详情校验必需题目标识字段，缺少 Python3 模板时允许 `lc get` 查看但阻止 `lc solve` 写入 `solution.py`。
 - `lc test` 自动调用 `Solution` 首个公开方法，只接收安全字面量参数并显示实际结果；每组默认 1 秒，无输入或任一错误返回 1，`--stdin` 使用 JSON Lines。成功只代表调用完成，不代表算法正确。
 - 节点输入按 `ListNode` / `TreeNode` 及可空、字符串类型注解转换，不按参数名猜类型。链表为整数数组，树为力扣式层序数组，`null` 与 `None` 兼容；节点返回值和原地修改参数转回数组，空节点返回注解对应 `[]`。模板辅助定义不进入提交区域。
 - 普通与延迟注解遵循相同节点规则，包含引号的嵌套节点类型仍拒绝；`Literal` 取值和 `Annotated` 元数据不作为类型引用，`Annotated` 包装节点本身暂不支持。
@@ -24,10 +24,10 @@
 - `test --stdin` 的运行时启动错误统一为 `startup_error` 事件，带稳定 `code`，退出 1；非法 CLI 参数使用标准用法错误，退出 2。
 - `lc doctor` 默认不执行用户代码，`lc submit` 也不执行本地代码；只有明确 `--run-solution` 才授权 Doctor 执行。
 - `lc submit` 取得 submission ID 后默认等待 30 秒，可用 `--wait-timeout` 调整。只有明确 `Accepted` 返回 0；其他判题、等待超时和轮询失败返回 1，用法错误返回 2。超时不代表代码未提交，必须保留 submission ID。
-- `lc check <Submission ID>` 只查询一次已有提交，不发送代码、不持续轮询；仍在判题、非 Accepted 或查询失败返回 1，Accepted 返回 0，用法错误返回 2。
-- `lc login` 默认 Chrome → Edge → 手动 Cookie；显式浏览器不跨浏览器回退。同一次浏览器尝试共享 180 秒单调时钟预算（涵盖连接、授权等待、重试与轮询；不含连接关闭超时与随后的 10 秒在线账号校验），不保证整条命令硬上限。CLI 不读取 Cookie 数据库、不创建专用 profile、不关闭日常浏览器。
+- `lc check <Submission ID>` 只查询一次已有提交，不发送代码、不持续轮询；服务端返回 `PENDING` / `STARTED` 时输出不确定提示（可能仍在处理或对当前账号不可见，请确认提交 ID 和账号），不凭缺失 `status_msg` 推断“提交不存在”，保留 Submission ID 并返回 1，仅 `Accepted` 返回 0，用法错误返回 2。刚执行 `lc submit` 后的自动轮询仍对 `PENDING` / `STARTED` 继续等待直至判题完成或超时。
+- `lc login` 默认 Chrome → Edge → 手动 Cookie；显式浏览器不跨浏览器回退。同一次浏览器尝试共享 180 秒单调时钟预算（涵盖连接、授权等待、重试与轮询；不含连接关闭超时与随后的 10 秒在线账号校验），不保证整条命令硬上限。CLI 不读取 Cookie 数据库、不创建专用 profile、不关闭日常浏览器。手动 Cookie 输入要求交互式终端（`sys.stdin.isatty()`）；非交互环境下立即以退出码 1 结束而不阻塞控制台或从管道 `stdin` 读取明文 Cookie，交互输入遇到 `EOF` 亦干净返回 1，且失败均不覆盖已有 `session.json`。
 - `config editor`、`login`、`status`、`profile`、`show`、`get`、`check` 和默认 `doctor` 不要求工作区；`solve`、`test`、`submit` 和 `doctor --run-solution` 必须使用已配置工作区。
-- Session 属于当前系统用户，保存在平台本地状态目录的 `leetcode-local-cli/session.json`；切换或删除工作区不得改变登录态。Session 不得输出、提交、同步或上传。
+- Session 属于当前系统用户，保存在平台本地状态目录的 `leetcode-local-cli/session.json`；切换或删除工作区不得改变登录态。Session 不得输出、提交、同步或上传。题目命令（`show`/`get`/`solve`）仅校验本地 `session.json` 格式而不预先联网验证登录有效（公开题目允许无 Session 查询属于另行立项的产品决策）；`status`/`profile`/`doctor` 负责确认远端登录态，跨账号判断以同一份 Cookie 查询到的远端账号为准，而不以浏览器当前账号或本地记录的 `username` 为准。
 - 凭据 HTTP 请求只允许 HTTPS、精确 `leetcode.cn`、443/默认端口和无 URL 用户信息；拒绝全部重定向，包括同站跳转。接口迁移需显式更新适配代码。
 - 工作区 marker 是本机元数据，固定为 `.leetcode_local_cli/workspace.toml`，建议忽略且不提交；CLI 不自动修改用户仓库的 `.gitignore`。
 - 内测阶段不兼容、不读取也不迁移旧工作区 Session 和根目录 `.leetcode-local-cli.toml`。

@@ -29,6 +29,11 @@
   - DevTools 登录单次浏览器尝试共用 180 秒单调时钟 `deadline`（覆盖连接、等待、重试与轮询），打开浏览器授权页后按当前单调时钟重算剩余预算以防超时后继续等待，保留 Chrome → Edge → 手动回退的逐浏览器独立预算，并明确 `close_timeout` 与在线账号校验（10 秒超时）不在轮询硬上限内。
   - `lc solve` 对生效的非法 `--editor` CLI 传参返回用法错误退出码 2，`--no-open` 仍优先跳过该校验；损坏的本地用户配置编辑器设置仍返回运行错误退出码 1，保存成功但编辑器启动失败仍警告并退出 0。
   - 修复 Linux/macOS 纳秒级 `monotonic()` 导致的既有 `test_cli.py` 授权端点测试浮点严格相等失败，完成 `v0.12.0` 版本与发布说明整理（见 [v0.12.0 Release Notes](release-notes/v0.12.0.md)）。
+  - 针对真实环境验收反馈的发布前收敛修复：
+    - `lc check` 对 `PENDING` / `STARTED` 不再断言“提交仍在判题中”，而是明确提示“暂未取得可确认的判题结果。提交可能仍在处理，或对当前账号不可见，请确认提交 ID 和账号”；不凭缺失 `status_msg` 推断提交不存在，继续保留 Submission ID、退出码 1 和单次查询行为，`lc submit` 提交后自动轮询仍继续等待直至判题完成或超时。
+    - 区分明确认证失效（HTTP `401` 及 GraphQL `extensions.code == "UNAUTHENTICATED"` -> `ClientErrorKind.UNAUTHORIZED`，提示重新执行 `lc login`）与权限拒绝（HTTP `403` 及 GraphQL `extensions.code` 为 `FORBIDDEN` / `PERMISSION_DENIED` -> `ClientErrorKind.FORBIDDEN`，提示检查当前账号权限或登录状态且不承诺重登录必定解决），不解析自然语言错误文本，不输出原始服务端响应；`submit` 初始 POST 仍不自动重试，轮询对 `401`/`403` 也不重试；`lc doctor` 同步区分连通性通过与 `401`/`403` 失败提示。
+    - 修正 [README](../README.md)、[产品边界](PRODUCT_BOUNDARIES.md) 与 [安全边界](SECURITY_REVIEW.md) 中关于 Session 与题目命令的说明：题目命令（`show`/`get`/`solve`）仅校验本地 `session.json` 格式而不预先在线验签；远端登录态与 Cookie 实际对应账号由 `status`/`profile`/`doctor` 确认（注意区分浏览器账号、`session.json` 保存用户名与 Cookie 实际对应的远端账号）。
+    - `lc login` 手动 Cookie 回退在 `sys.stdin` 非交互式终端下立即提示并以退出码 1 快速失败，不通过 `getpass` 阻塞控制台也不从管道读取明文 Cookie；交互输入触发 `EOFError` 亦干净退出 1，失败不覆盖已有 `session.json`。
 
 用户命令和限制见 [README](../README.md)，模块结构见 [ARCHITECTURE](ARCHITECTURE.md)。
 
@@ -48,10 +53,11 @@
 
 ## 当前优先级
 
-1. **当前版本发布收尾**：核实对应提交的三平台 CI、构建和两种产物安装；整理版本与发布说明；获得发布授权后完成发布和公开安装验证。（当前进度：`v0.12.0` 版本号、Release Notes、本地门禁及双产物隔离安装已就绪，待维护者授权打标签发布与公开安装验证。）
-2. **示例输入回放**：支持当前题目的示例输入复用，沿用现有 worker；明确只报告调用结果，不宣称答案正确。
-3. **系统凭据存储**：先确定平台支持、存储不可用时的行为及旧 Session 处置，再单独实现和验收。
-4. **查询缓存**：先测量请求次数与耗时，再决定缓存范围、容量和失效规则。
+1. **当前版本发布收尾**：核实对应提交的三平台 CI、构建和两种产物安装；整理版本与发布说明；获得发布授权后完成发布和公开安装验证。（当前进度：发布前反馈修复已完成本地门禁与双产物隔离安装验收，待推送并在三平台 CI 复验后，由维护者授权打标签发布与公开安装验证。）
+2. **只读查询有限重试**：按操作性质划分重试策略，仅允许只读查询（包含本质为 GraphQL POST 的 `problem_list` / `problem_detail` / `user_status` / `problem_stats` 等）在明确次数和单调时间预算内恢复瞬时故障；初始提交 POST 仍严禁自动重试，判题状态轮询沿用现有限时预算策略。
+3. **示例输入回放**：支持当前题目的示例输入复用，沿用现有 worker；明确只报告调用结果，不宣称答案正确。
+4. **系统凭据存储**：先确定平台支持、存储不可用时的行为及旧 Session 处置，再单独实现和验收。
+5. **查询缓存**：先测量请求次数与耗时，再决定缓存范围、容量和失效规则。
 
 暂缓：**国际站适配器、设计题协议**（等真实需求成立，再调整产品边界）。
 
@@ -64,6 +70,7 @@
 - 稳定 Python API 和站点适配器尚未形成。
 - HTTP 的全部重定向拒绝策略可能在接口迁移时使命令暂时失败，需要显式更新适配器；这是保护凭据和避免重放提交的取舍。
 - 配置修复提供异常回滚和原始字节备份，不提供断电时的跨文件事务或多进程锁。
+- 当本机 `uv` 版本（如 `0.13.7`）超出 `pyproject.toml` 中声明的 `uv_build>=0.11.7,<0.12.0` 范围时，直接执行 `uv build --no-sources` 或 sdist 隔离安装会给出后端版本范围警告；使用 `uv build --no-sources --force-pep517` 可验证在声明范围内正常构建，但目前暂不调整构建后端依赖声明，继续作为已知构建警告保留。
 - 本次 Windows 验收中，在 Zed 进程运行时有一次切题写入于 `os.replace` 阶段返回 `WinError 5`；旧解法得到保留，随后相同原子替换连续 3 次成功，未形成稳定复现。
 
 详细风险见 [SECURITY_REVIEW](SECURITY_REVIEW.md)。
@@ -73,6 +80,16 @@
 核心边界稳定后，再评估国际站、最小 Python API、系统秘密存储和编辑器集成。这些方向不是当前排期，也不授权预先引入数据库、Web、AI 或多语言运行时。
 
 ## 最近验证
+
+2026-11-16（UTC），`v0.12.0` 发布前反馈修复与非交互登录兜底：完成 `lc check` 未确认中间态提示、`401` / `403` 与结构化 GraphQL 鉴权/权限分类（不泄露原始响应、初始提交 POST 保持不自动重试）、`lc login` 非 TTY 手动 Cookie 快速失败与 `EOFError` 干净退出，以及 Session / 题目命令文档校准。本地通过 `uv run ruff format --check src tests scripts`（79 个文件）、`uv run ruff check src tests scripts pyproject.toml`、`uv run pyright src tests scripts`（0 errors）、完整 Windows 测试（670 passed、18 skipped，较 `78e62ea` 基线增加 40 项回归与参数化用例）、`uv run lc --version`（`leetcode-local-cli 0.12.0`）与 `--help`，并通过 `uv build --no-sources`、`uv build --no-sources --force-pep517` 及 wheel / sdist 隔离安装 `scripts/smoke_test.py`（`--force-pep517` 构建无后端版本警告；直接 `uv build --no-sources` 与 sdist 隔离安装仍有 `uv 0.13.7` 超出 `uv_build <0.12.0` 范围警告）。推送后由 GitHub Actions `ci.yml` 在三平台复验。
+
+补充真机实测归档（在修复期间由维护者授权本机执行，已按当前源码核对）：
+- 已在真实文件、真实 LeetCode CN 接口或真实 worker 上实证：`session.json` 缺失 / 非法 JSON / 结构错误 / 缺 `csrftoken` / 非 UTF-8 均按预期干净退出 1（`submit` 先校验本地解法提交标记，再读 Session）；伪造 Cookie 下 `status`/`profile` 报登录态无效、`get`/`solve` 仍可查询公开题目、真实 `submit` 收到 HTTP `403` 后已准确进入 `FORBIDDEN` 提示（修正之前过期 JWT 响应走通用 HTTP 错误的观察）；真实提交 Wrong Answer（`760128980`）与 `lc submit --wait-timeout 0.5` 超时保留 ID 后经 `lc check 760129019` 复查 Accepted 的恢复链路；不存在大 ID `99999999999` 走 `SubmissionPollingFailed`；死 DevTools 端口 `--devtools-port 19999` 失败后原有 `session.json` 未被破坏（并暴露了无 TTY 下 `getpass` 挂起问题，已在随后提交中修复为快速失败）；真实 `v1` `config.toml` 经 `lc config editor --clear` 升级为 `v2` 并保留有效字段，未配置编辑器时 `solve` 仅警告且退出 0，复原 `zed` 正常；真 worker `ValueError` 返回准确 `error_line` 与 `--verbose` 调用栈，死循环 `--timeout 1` 超时后可重启 worker 继续处理后续输入。注：实测期间跨账号 ID `747241009` 曾看到旧版“提交仍在判题中”（并行改动重叠或全局旧版入口所致），当前仓库 `rendering.py` 已切换为“暂未取得可确认的判题结果……请确认提交 ID 和账号”。
+- 真机环境未触发或未重复实测的范围（依赖自动化测试或远端 CI 覆盖）：真实 `submit` 路径上的 HTTP `401` 与 `3xx` 重定向响应、全新 Chrome/Edge 授权弹窗及 180 秒预算完整交互流程、`init --repair` 实机修复执行，以及 Linux / macOS 平台测试（待推送后由 `ci.yml` 覆盖）。
+
+外部真实环境初测反馈归档（对应发布前初始报告）：暴露了 `lc check` 对跨账号 `747241009` 的 `PENDING` 误导文案、过期 Session 下 `show`/`get`/`solve` 与 `status`/`profile` 文档错位、`submit` 缺少 401/403 鉴权分类、只读 GraphQL 查询缺少瞬时重试以及 `uv 0.13.7` 后端版本警告；同时侧面印证了 `--editor` Shell 命令串退出码 2 不执行、无效编辑器保存警告退出 0、`solve` 覆盖普通 `solution.py`、不存在题号 `lc get 99999999` 与空 `solution.py --stdin` 输出 `startup_error` 等设计边界。需特别注明两项环境偏差：初测时浏览器当前登录账号与 `session.json` 保存的用户名不一致（跨账号归属必须以同一份 Cookie 查询到的远端账号为准），且测试脚本通过管道 `$?` 采集到的是 `tail` 而非 `lc` 的退出码，因此该记录**不作为“30 题全部 Accepted”的证据归档**。
+
+2026-11-14（UTC）先前的 `78e62ea` 提交已在 GitHub Actions `ci.yml`（Run `43668890993`）通过 `ubuntu-latest`、`windows-latest` 与 `macos-latest` 三平台 Python 3.12 门禁。
 
 2026-11-14，`v0.12.0` 发布准备：针对提交 `9c7a4f2` 在 Ubuntu/macOS CI（645 passed、1 skipped）中暴露的 2 项 `test_cli.py` 纳秒级 `monotonic()` 严格相等断言失败补齐固定假时钟与 `pytest.approx`，完成 `pyproject.toml` / `uv.lock`（`0.12.0`）、`README.md`、`docs/release-notes/v0.12.0.md` 与路线图同步。本地通过 `uv run ruff format --check src tests scripts`（79 个文件）、`uv run ruff check src tests scripts pyproject.toml`、`uv run pyright src tests scripts`（0 errors）、完整 Windows 测试（630 passed、18 skipped）、`uv run lc --version`（`leetcode-local-cli 0.12.0`）与 `--help`。分别通过 `uv build --no-sources` 与 `uv build --no-sources --force-pep517` 成功构建 `0.12.0` wheel 与 sdist（`--force-pep517` 无后端范围警告；直接 `uv build --no-sources` 与 sdist 隔离安装阶段因本机 `uv 0.13.7` 超出 `uv_build <0.12.0` 声明范围给出版本警告），两种产物均通过 `scripts/smoke_test.py` 隔离安装验收。未创建标签或发布，未修改全局工具安装，未访问真实账号、启动真实浏览器或本地编辑器；推送后等待三平台 `ci.yml` 复验。
 

@@ -16,7 +16,7 @@ from leetcode_local_cli.models.editor import EditorConfig
 from leetcode_local_cli.models.session import Credentials, Session
 from leetcode_local_cli.storage.paths import UserPaths
 from leetcode_local_cli.storage.session import save_session
-from leetcode_local_cli.use_cases import account, diagnostics, problems
+from leetcode_local_cli.use_cases import account, diagnostics, problems, submission
 from leetcode_local_cli.use_cases.setup import initialize_workspace
 from leetcode_local_cli.use_cases.settings import configure_editor
 
@@ -595,3 +595,198 @@ def test_missing_python_snippet_allows_get_and_blocks_solve(
     assert solve_result.exit_code == 1, solve_result.output
     assert "Python3" in unstyle(solve_result.output)
     assert workspace.paths.solution_file.read_bytes() == original_solution
+
+
+def test_check_pending_reports_uncertain_status_without_claiming_nonexistent(
+    isolated_user, monkeypatch
+) -> None:
+    save_session(
+        Session(Credentials("synthetic-session", "synthetic-csrf")),
+        isolated_user.session_file,
+    )
+    recorded_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        recorded_requests.append(request)
+        return httpx.Response(200, request=request, json={"state": "PENDING"})
+
+    monkeypatch.setattr(
+        submission,
+        "LeetCodeClient",
+        partial(LeetCodeClient, transport=httpx.MockTransport(handler)),
+    )
+
+    result = CliRunner().invoke(app, ["check", "747241009"])
+
+    assert result.exit_code == 1, result.output
+    output = unstyle(result.output)
+    assert len(recorded_requests) == 1
+    assert "暂未取得可确认的判题结果" in output
+    assert "对当前账号不可见" in output
+    assert "747241009" in output
+    assert "提交不存在" not in output
+    assert "提交仍在判题中" not in output
+
+
+@pytest.mark.parametrize(
+    ("status_code", "secret_body", "expected_text"),
+    [
+        (401, "RAW_401_SECRET", "lc login"),
+        (403, "RAW_403_SECRET", "账号权限"),
+    ],
+)
+def test_submit_reports_auth_and_permission_failures_without_retry_or_leak(
+    isolated_user,
+    tmp_path,
+    monkeypatch,
+    status_code: int,
+    secret_body: str,
+    expected_text: str,
+) -> None:
+    from leetcode_local_cli.models.solution import ProblemMetadata
+    from leetcode_local_cli.storage.solution import build_solution_content
+
+    workspace = initialize_workspace(
+        tmp_path, user_config_file=isolated_user.user_config_file
+    ).paths
+    workspace.solution_file.write_text(
+        build_solution_content(
+            "class Solution:\n    def twoSum(self):\n        pass\n",
+            ProblemMetadata("1", "1", "Two Sum", "two-sum"),
+        ),
+        encoding="utf-8",
+    )
+    save_session(
+        Session(Credentials("synthetic-session", "synthetic-csrf")),
+        isolated_user.session_file,
+    )
+    recorded_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        recorded_requests.append(request)
+        return httpx.Response(status_code, request=request, json={"error": secret_body})
+
+    monkeypatch.setattr(
+        submission,
+        "LeetCodeClient",
+        partial(LeetCodeClient, transport=httpx.MockTransport(handler)),
+    )
+
+    result = CliRunner().invoke(app, ["submit"])
+
+    assert result.exit_code == 1, result.output
+    output = unstyle(result.output)
+    assert len(recorded_requests) == 1
+    assert recorded_requests[0].method == "POST"
+    assert expected_text in output
+    assert secret_body not in output
+
+
+def test_submit_still_polls_pending_status_until_judged(
+    isolated_user, tmp_path, monkeypatch
+) -> None:
+    from leetcode_local_cli.models.solution import ProblemMetadata
+    from leetcode_local_cli.storage.solution import build_solution_content
+
+    workspace = initialize_workspace(
+        tmp_path, user_config_file=isolated_user.user_config_file
+    ).paths
+    workspace.solution_file.write_text(
+        build_solution_content(
+            "class Solution:\n    def twoSum(self):\n        pass\n",
+            ProblemMetadata("1", "1", "Two Sum", "two-sum"),
+        ),
+        encoding="utf-8",
+    )
+    save_session(
+        Session(Credentials("synthetic-session", "synthetic-csrf")),
+        isolated_user.session_file,
+    )
+    now = 0.0
+    check_calls = 0
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal check_calls
+        if request.url.path == "/problems/two-sum/submit/":
+            return httpx.Response(200, request=request, json={"submission_id": 888})
+        if request.url.path == "/submissions/detail/888/check/":
+            check_calls += 1
+            if check_calls == 1:
+                return httpx.Response(200, request=request, json={"state": "PENDING"})
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "state": "SUCCESS",
+                    "status_msg": "Accepted",
+                    "status_runtime": "4 ms",
+                    "status_memory": "16 MB",
+                },
+            )
+        raise AssertionError(f"unexpected path: {request.url.path}")
+
+    monkeypatch.setattr(submission, "monotonic", fake_monotonic)
+    monkeypatch.setattr(submission, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        submission,
+        "LeetCodeClient",
+        partial(LeetCodeClient, transport=httpx.MockTransport(handler)),
+    )
+
+    result = CliRunner().invoke(app, ["submit", "--wait-timeout", "5"])
+
+    assert result.exit_code == 0, result.output
+    output = unstyle(result.output)
+    assert check_calls == 2
+    assert "通过" in output
+    assert "Accepted" in output
+
+
+def test_login_dead_devtools_port_in_non_tty_exits_cleanly_preserving_session(
+    isolated_user, monkeypatch
+) -> None:
+    from leetcode_local_cli.commands import account as account_commands
+    from leetcode_local_cli.integrations.browser import BrowserError
+    from leetcode_local_cli.use_cases import login as login_use_case
+
+    save_session(
+        Session(
+            Credentials("synthetic-session", "synthetic-csrf"),
+            username="learner",
+            source="Chrome DevTools",
+        ),
+        isolated_user.session_file,
+    )
+    original_bytes = isolated_user.session_file.read_bytes()
+
+    monkeypatch.setattr(
+        login_use_case,
+        "validate_devtools_browser",
+        lambda port, browser: (_ for _ in ()).throw(
+            BrowserError("无法连接浏览器 DevTools")
+        ),
+    )
+    monkeypatch.setattr(
+        account_commands,
+        "getpass",
+        lambda *args, **kwargs: pytest.fail("must not block on getpass in non-TTY"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["login", "--browser", "chrome", "--devtools-port", "19999"],
+        input="LEETCODE_SESSION=new; csrftoken=new\n",
+    )
+
+    assert result.exit_code == 1
+    output = unstyle(result.output)
+    assert "无法连接浏览器 DevTools" in output
+    assert "非交互式终端" in output
+    assert isolated_user.session_file.read_bytes() == original_bytes

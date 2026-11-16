@@ -274,6 +274,27 @@ def test_diagnose_remote_reports_expired_cookie() -> None:
     assert authentication.suggestion == "请执行 lc login 刷新登录态"
 
 
+def test_diagnose_remote_distinguishes_unauthorized_and_forbidden() -> None:
+    unauthorized_conn, unauthorized_auth = diagnose_remote(
+        ClientFailure(error=ClientErrorKind.UNAUTHORIZED, status_code=401)
+    )
+    assert unauthorized_conn.status is DoctorStatus.PASS
+    assert unauthorized_auth.status is DoctorStatus.FAIL
+    assert unauthorized_auth.suggestion is not None
+    assert "lc login" in unauthorized_auth.suggestion
+
+    forbidden_conn, forbidden_auth = diagnose_remote(
+        ClientFailure(error=ClientErrorKind.FORBIDDEN, status_code=403)
+    )
+    assert forbidden_conn.status is DoctorStatus.PASS
+    assert forbidden_auth.status is DoctorStatus.FAIL
+    assert "权限" in forbidden_auth.message
+    assert "登录" in forbidden_auth.message
+    assert forbidden_auth.suggestion is not None
+    assert "账号权限" in forbidden_auth.suggestion
+    assert "lc login" in forbidden_auth.suggestion
+
+
 def test_diagnose_remote_reports_authenticated_user() -> None:
     connectivity, authentication = diagnose_remote(
         ClientSuccess(data=UserStatus(True, "learner"))

@@ -35,6 +35,8 @@ def client_error_message(kind: ClientErrorKind | None) -> str:
             return "LeetCode GraphQL 接口返回错误，请确认题目、权限或登录状态后重试"
         case ClientErrorKind.UNAUTHORIZED:
             return "登录态无效或已过期，请重新执行 lc login"
+        case ClientErrorKind.FORBIDDEN:
+            return "请求被权限拒绝，请检查当前账号权限或登录状态；若登录已过期可执行 lc login"
         case ClientErrorKind.MISSING_CSRF:
             return "缺少提交凭证 csrftoken，请重新执行 lc login"
         case _:

@@ -32,6 +32,7 @@ from leetcode_local_cli.use_cases import (
     account,
     common,
     diagnostics,
+    login,
     problems,
     submission,
 )
@@ -171,13 +172,27 @@ def test_profile_does_not_fetch_stats_when_signed_out(monkeypatch, user_paths) -
 
 @pytest.mark.parametrize(
     "error_kind",
-    [ClientErrorKind.UNAUTHORIZED, ClientErrorKind.MISSING_CSRF],
+    [
+        ClientErrorKind.UNAUTHORIZED,
+        ClientErrorKind.FORBIDDEN,
+        ClientErrorKind.MISSING_CSRF,
+    ],
 )
 def test_authentication_error_messages_use_installed_cli_command(error_kind) -> None:
     message = common.client_error_message(error_kind)
 
     assert "lc login" in message
     assert "uv run" not in message
+
+
+def test_forbidden_error_message_prompts_permissions_and_login_state() -> None:
+    forbidden_message = common.client_error_message(ClientErrorKind.FORBIDDEN)
+    unauthorized_message = common.client_error_message(ClientErrorKind.UNAUTHORIZED)
+
+    assert forbidden_message != unauthorized_message
+    assert "账号权限" in forbidden_message
+    assert "登录状态" in forbidden_message
+    assert "lc login" in forbidden_message
 
 
 def test_parse_question_id_rejects_success_without_id(monkeypatch) -> None:
@@ -427,6 +442,29 @@ def test_submission_polling_does_not_retry_non_transient_http_error() -> None:
     assert clock.sleeps == []
 
 
+@pytest.mark.parametrize(
+    ("error_kind", "status_code"),
+    [
+        (ClientErrorKind.UNAUTHORIZED, 401),
+        (ClientErrorKind.FORBIDDEN, 403),
+    ],
+)
+def test_submission_polling_does_not_retry_auth_or_permission_errors(
+    error_kind: ClientErrorKind,
+    status_code: int,
+) -> None:
+    policy = submission.SubmissionPollingPolicy(wait_timeout_seconds=5)
+    outcome, _, clock = _poll(
+        [ClientFailure(error=error_kind, status_code=status_code)],
+        policy,
+    )
+
+    assert isinstance(outcome, SubmissionPollingFailed)
+    assert outcome.submission_id == 123
+    assert outcome.error_kind is error_kind
+    assert clock.sleeps == []
+
+
 def test_submission_polling_rejects_terminal_result_without_status() -> None:
     policy = submission.SubmissionPollingPolicy(wait_timeout_seconds=5)
     outcome, _, _ = _poll(
@@ -489,6 +527,88 @@ def test_submit_current_solution_never_retries_failed_post(
         submission.submit_current_solution(app_paths)
 
     assert attempts == [("two-sum", "1", "class Solution:\n    pass")]
+
+
+@pytest.mark.parametrize(
+    ("error_kind", "status_code", "expected_text"),
+    [
+        (ClientErrorKind.UNAUTHORIZED, 401, "lc login"),
+        (ClientErrorKind.FORBIDDEN, 403, "账号权限"),
+    ],
+)
+def test_submit_current_solution_reports_unauthorized_and_forbidden_without_retry(
+    monkeypatch,
+    app_paths,
+    error_kind: ClientErrorKind,
+    status_code: int,
+    expected_text: str,
+) -> None:
+    attempts = []
+
+    class AuthRejectClient(FakeClient):
+        def submit_solution(
+            self,
+            title_slug: str,
+            question_id: str,
+            code: str,
+        ) -> ClientResult[object]:
+            attempts.append((title_slug, question_id, code))
+            return ClientFailure(error=error_kind, status_code=status_code)
+
+        def get_submission_result(
+            self,
+            submission_id: int,
+            *,
+            timeout: float,
+        ) -> ClientResult[object]:
+            raise AssertionError("failed POST must not start polling")
+
+    monkeypatch.setattr(submission, "load_cookies_from_session", lambda paths: {})
+    monkeypatch.setattr(submission, "LeetCodeClient", AuthRejectClient)
+    monkeypatch.setattr(
+        submission,
+        "parse_solution_submission",
+        lambda path: (
+            ProblemMetadata("1", "1", "Two Sum", "two-sum"),
+            "class Solution:\n    pass",
+        ),
+    )
+
+    with pytest.raises(UseCaseError, match=expected_text) as caught:
+        submission.submit_current_solution(app_paths)
+
+    assert caught.value.code.value == "client_error"
+    assert attempts == [("two-sum", "1", "class Solution:\n    pass")]
+
+
+def test_validate_and_save_login_handles_unauthorized_and_forbidden(
+    monkeypatch,
+    user_paths,
+) -> None:
+    class UnauthorizedClient(FakeClient):
+        def user_status(self) -> ClientResult[object]:
+            return ClientFailure(error=ClientErrorKind.UNAUTHORIZED, status_code=401)
+
+    class ForbiddenClient(FakeClient):
+        def user_status(self) -> ClientResult[object]:
+            return ClientFailure(error=ClientErrorKind.FORBIDDEN, status_code=403)
+
+    cookies = {"LEETCODE_SESSION": "session", "csrftoken": "csrf"}
+
+    monkeypatch.setattr(login, "LeetCodeClient", UnauthorizedClient)
+    assert (
+        login.validate_and_save_login(
+            cookies, source="chrome", session_file=user_paths.session_file
+        )
+        is False
+    )
+
+    monkeypatch.setattr(login, "LeetCodeClient", ForbiddenClient)
+    with pytest.raises(UseCaseError, match="账号权限") as caught:
+        login.validate_and_save_login(
+            cookies, source="chrome", session_file=user_paths.session_file
+        )
+    assert caught.value.code.value == "client_error"
 
 
 @pytest.mark.parametrize(

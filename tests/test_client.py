@@ -464,3 +464,106 @@ def test_problem_detail_allows_missing_optional_fields_and_python_snippet() -> N
     assert result.data.content_html == ""
     assert result.data.tags == ()
     assert result.data.python_code is None
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error"),
+    [
+        (401, ClientErrorKind.UNAUTHORIZED),
+        (403, ClientErrorKind.FORBIDDEN),
+        (502, ClientErrorKind.HTTP),
+    ],
+)
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        ("user_status", ()),
+        ("problem_stats", ()),
+        ("submit_solution", ("two-sum", "1", "class Solution: pass")),
+        ("get_submission_result", (123,)),
+    ],
+)
+def test_http_auth_and_permission_statuses_map_to_distinct_error_kinds(
+    status_code: int,
+    expected_error: ClientErrorKind,
+    method_name: str,
+    args: tuple[object, ...],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code, request=request, json={"error": "SECRET_RAW"}
+        )
+
+    with _client_with_transport(
+        handler, cookies={"LEETCODE_SESSION": "session", "csrftoken": "csrf"}
+    ) as client:
+        result = getattr(client, method_name)(*args)
+
+    assert not result.ok
+    assert result.error is expected_error
+    assert result.status_code == status_code
+
+
+@pytest.mark.parametrize(
+    ("errors", "expected_error"),
+    [
+        (
+            [{"message": "SECRET_RAW", "extensions": {"code": "UNAUTHENTICATED"}}],
+            ClientErrorKind.UNAUTHORIZED,
+        ),
+        (
+            [{"message": "SECRET_RAW", "extensions": {"code": " unauthenticated "}}],
+            ClientErrorKind.UNAUTHORIZED,
+        ),
+        (
+            [{"message": "SECRET_RAW", "extensions": {"code": "FORBIDDEN"}}],
+            ClientErrorKind.FORBIDDEN,
+        ),
+        (
+            [{"message": "SECRET_RAW", "extensions": {"code": "PERMISSION_DENIED"}}],
+            ClientErrorKind.FORBIDDEN,
+        ),
+        (
+            [
+                {"message": "noise", "extensions": {"code": "FORBIDDEN"}},
+                {"message": "noise", "extensions": {"code": "UNAUTHENTICATED"}},
+            ],
+            ClientErrorKind.UNAUTHORIZED,
+        ),
+        (
+            [{"message": "SECRET_RAW", "extensions": {"code": "BAD_USER_INPUT"}}],
+            ClientErrorKind.GRAPHQL_ERROR,
+        ),
+        (
+            [{"message": "unauthorized in prose only"}],
+            ClientErrorKind.GRAPHQL_ERROR,
+        ),
+        (
+            [{"message": "forbidden", "extensions": {"code": 403}}],
+            ClientErrorKind.GRAPHQL_ERROR,
+        ),
+        (
+            [{"message": "noise", "extensions": "FORBIDDEN"}],
+            ClientErrorKind.GRAPHQL_ERROR,
+        ),
+        (
+            ["raw-string-item"],
+            ClientErrorKind.GRAPHQL_ERROR,
+        ),
+    ],
+)
+def test_graphql_errors_classify_structured_auth_codes_only(
+    errors,
+    expected_error: ClientErrorKind,
+) -> None:
+    with _client_with_transport(
+        lambda request: httpx.Response(
+            200,
+            request=request,
+            json={"errors": errors, "data": None},
+        ),
+    ) as client:
+        result = client.user_status()
+
+    assert not result.ok
+    assert result.error is expected_error

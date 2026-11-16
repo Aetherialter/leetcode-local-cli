@@ -121,7 +121,9 @@ def test_render_pending_submission_shows_retry_command(monkeypatch) -> None:
     ui.render_submission_result(SubmissionPending(123))
 
     rendered = output.getvalue()
-    assert "仍在判题中" in rendered
+    assert "暂未取得可确认的判题结果" in rendered
+    assert "对当前账号不可见" in rendered
+    assert "仍在判题中" not in rendered
     assert "Submission ID：123" in rendered
     assert "lc check 123" in rendered
 

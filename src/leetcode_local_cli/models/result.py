@@ -11,6 +11,7 @@ class ClientErrorKind(str, Enum):
     INVALID_RESPONSE = "invalid_response"
     GRAPHQL_ERROR = "graphql_error"
     UNAUTHORIZED = "unauthorized"
+    FORBIDDEN = "forbidden"
     MISSING_CSRF = "missing_csrf"
     UNSAFE_TARGET = "unsafe_target"
     REDIRECT = "redirect"

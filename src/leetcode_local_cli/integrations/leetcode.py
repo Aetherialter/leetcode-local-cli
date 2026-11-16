@@ -120,6 +120,28 @@ def _parse_retry_after(value: str | None) -> float | None:
     return seconds
 
 
+def _classify_graphql_errors(errors: list[object]) -> ClientErrorKind:
+    """Classify structured GraphQL error codes without trusting raw prose."""
+    saw_forbidden = False
+    for item in errors:
+        if not isinstance(item, dict):
+            continue
+        extensions = item.get("extensions")
+        if not isinstance(extensions, dict):
+            continue
+        code = extensions.get("code")
+        if not isinstance(code, str):
+            continue
+        normalized = code.strip().upper()
+        if normalized == "UNAUTHENTICATED":
+            return ClientErrorKind.UNAUTHORIZED
+        if normalized in {"FORBIDDEN", "PERMISSION_DENIED"}:
+            saw_forbidden = True
+    if saw_forbidden:
+        return ClientErrorKind.FORBIDDEN
+    return ClientErrorKind.GRAPHQL_ERROR
+
+
 class LeetCodeClient:
     def __init__(
         self,
@@ -198,9 +220,15 @@ class LeetCodeClient:
         except (httpx.RequestError, httpx.InvalidURL):
             return ClientFailure(ClientErrorKind.NETWORK)
         except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            error_kind = ClientErrorKind.HTTP
+            if status_code == 401:
+                error_kind = ClientErrorKind.UNAUTHORIZED
+            elif status_code == 403:
+                error_kind = ClientErrorKind.FORBIDDEN
             return ClientFailure(
-                ClientErrorKind.HTTP,
-                status_code=exc.response.status_code,
+                error_kind,
+                status_code=status_code,
                 retry_after_seconds=_parse_retry_after(
                     exc.response.headers.get("Retry-After")
                 ),
@@ -221,7 +249,7 @@ class LeetCodeClient:
         if errors is not None:
             if isinstance(errors, list):
                 if errors:
-                    return ClientFailure(ClientErrorKind.GRAPHQL_ERROR)
+                    return ClientFailure(_classify_graphql_errors(errors))
             else:
                 return ClientFailure(ClientErrorKind.INVALID_RESPONSE)
         data = result.data.get("data")

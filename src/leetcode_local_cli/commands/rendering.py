@@ -322,9 +322,11 @@ def render_doctor_report(report: DoctorReport) -> None:
 
 def render_submission_result(result: SubmissionOutcome) -> None:
     if isinstance(result, SubmissionPending):
-        warning("提交仍在判题中")
+        warning(
+            "暂未取得可确认的判题结果。提交可能仍在处理，或对当前账号不可见，请确认提交 ID 和账号。"
+        )
         info(f"Submission ID：{result.submission_id}")
-        info(f"可稍后重新执行：lc check {result.submission_id}")
+        info(f"若提交仍在处理，可稍后重新执行：lc check {result.submission_id}")
         return
     if isinstance(result, SubmissionTimedOut):
         error(f"判题等待超过 {result.waited_seconds:g} 秒")

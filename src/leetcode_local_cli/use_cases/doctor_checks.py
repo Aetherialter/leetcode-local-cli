@@ -201,6 +201,20 @@ def diagnose_remote(
                         suggestion="请执行 lc login 刷新登录态",
                     ),
                 )
+            case ClientErrorKind.FORBIDDEN:
+                return (
+                    DoctorCheck(
+                        name=CONNECTIVITY_CHECK_NAME,
+                        status=DoctorStatus.PASS,
+                        message="LeetCode 中文站接口可访问",
+                    ),
+                    DoctorCheck(
+                        name=AUTHENTICATION_CHECK_NAME,
+                        status=DoctorStatus.FAIL,
+                        message="请求被权限拒绝，账号权限受限或登录状态异常",
+                        suggestion="请检查当前账号权限或登录状态；如登录已过期可执行 lc login",
+                    ),
+                )
             case _:
                 message = "LeetCode 中文站诊断发生未知错误"
                 suggestion = "请稍后重试"

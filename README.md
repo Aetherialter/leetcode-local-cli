@@ -85,7 +85,7 @@ lc check <Submission ID>
 | `lc submit [--wait-timeout 秒数]` | 提交 marker 区域并限时等待判题；仅 Accepted 返回 0 |
 | `lc check <Submission ID>` | 查询一次已有提交的当前状态，不会重新提交代码 |
 
-`config editor`、`login`、`status`、`profile`、`show`、`get`、`check` 和不带 `--run-solution` 的 `doctor` 不要求先初始化工作区。账号和题目命令需要有效 Session；`doctor` 在 Session 缺失时仍会诊断并返回失败。`solve`、`test`、`submit` 和 `doctor --run-solution` 需要已配置的工作区。
+`config editor`、`login`、`status`、`profile`、`show`、`get`、`check` 和不带 `--run-solution` 的 `doctor` 不要求先初始化工作区。`status`、`profile`、`show`、`get`、`solve`、`submit` 和 `check` 都需要本地存在格式完整的 `session.json`；其中题目命令（`show`、`get`、`solve`）不预先验证远端登录态，公开题目查询成功不能证明当前登录仍有效。如需确认远端登录状态及当前 Cookie 实际对应的账号，请使用 `lc status`、`lc profile` 或 `lc doctor`（浏览器当前登录账号、`session.json` 记录的用户名，以及 Cookie 实际对应的远端账号可能不一致）。`doctor` 在 Session 缺失时仍会诊断并返回失败。`solve`、`test`、`submit` 和 `doctor --run-solution` 需要已配置的工作区。
 
 解法保存成功但未配置编辑器或启动失败时，`solve` 显示保存路径和警告，仍返回 0；写入失败则返回 1，并且不打开文件。
 
@@ -127,7 +127,7 @@ lc config editor --clear
 3. CLI 优先尝试日常 Chrome，再尝试日常 Edge；如果设置页面没有自动显示，请手动打开上述地址。
 4. 出现 **Allow remote debugging?** 连接确认框时选择 **Allow**，并保持 LeetCode 页面已登录。
 5. CLI 只获取 `leetcode.cn` 的 `LEETCODE_SESSION` 和 `csrftoken`，在线验证后保存。
-6. 自动登录失败时，回退到隐藏输入的手动 Cookie。
+6. 自动登录失败时，在交互式终端中回退到隐藏输入的手动 Cookie；若处于管道、后台脚本等非交互式终端，则立即提示并返回退出码 1，不阻塞等待输入、不从管道读取明文 Cookie，也不破坏已有 `session.json`。
 
 CLI 不读取或解密浏览器 Cookie 数据库，不创建专用 profile，也不关闭日常浏览器。单次浏览器尝试共享 180 秒单调时钟预算（涵盖连接、授权等待、重试与 Cookie 轮询，不含连接关闭超时与随后的在线账号校验）。
 
@@ -166,9 +166,9 @@ printf 'nums = [3, 2, 4], target = 6\n' | lc test --stdin
 
 某组超时后，下一组会重启 worker；若重新加载失败，该组报告失败并保留行号及可选调用栈，后续输入仍可继续尝试。
 
-`lc submit` 取得 submission ID 后默认等待判题 30 秒。判题查询只在总预算内有限重试；初始提交 POST 不自动重试，避免重复提交。等待超时或查询失败时会保留 submission ID，并返回退出码 1。
+`lc submit` 取得 submission ID 后默认等待判题 30 秒。判题查询只在总预算内有限重试；初始提交 POST 不自动重试，避免重复提交。遇到明确认证失效（HTTP 401 或已确认 GraphQL 鉴权错误码）会提示执行 `lc login`；遇到权限拒绝（HTTP 403 或对应权限错误码）会提示检查账号权限或登录状态。等待超时或查询失败时会保留 submission ID，并返回退出码 1。
 
-等待超时后可执行 `lc check <Submission ID>` 重新查询。该命令只请求一次：已经判题则展示结果，仍在判题则提示稍后重试；只有结果为 Accepted 时返回退出码 0。
+等待超时后可执行 `lc check <Submission ID>` 重新查询。该命令只请求一次：已经判题则展示结果；若服务端返回未完成中间态（对仍在处理、跨账号不可见或不存在的提交，接口可能返回相同状态），CLI 会提示暂未取得可确认的判题结果，请确认提交 ID 和当前账号，并返回退出码 1（若提交确仍在处理可稍后重查）；只有结果为 Accepted 时返回退出码 0。
 
 ## 安全与限制
 
